@@ -162,6 +162,7 @@ call time; `cached` and `disabled` skip the live web fetch.
 | `mode` | `review` or `act` | `review` |
 | **Model** | | |
 | `model` | Per-call override; the in-repo config file is the normal swap point | `deepseek/deepseek-v4-pro-0813` (review) / `anthropic/claude-opus-4.7` (act) |
+| `models` | Array of models (or comma separated arg) to code review | none  |
 | `reasoning_effort` | `minimal` / `low` / `medium` / `high` | `medium` |
 | `web_search_mode` | `disabled` / `cached` / `live` | `live` |
 | **Review-only** | | |
