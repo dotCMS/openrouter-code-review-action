@@ -181,6 +181,7 @@ call time; `cached` and `disabled` skip the live web fetch.
 | `model` | Per-call override; the in-repo config file is the normal swap point | `deepseek/deepseek-v4-pro-0813` (review) / `anthropic/claude-opus-4.7` (act) |
 | `models` | Array of models (or comma separated arg) to code review | none  |
 | `reasoning_effort` | `minimal` / `low` / `medium` / `high` | `medium` |
+| `model_timeout_seconds` | Wall-clock budget per reviewer model pass; 0 disables | `900` |
 | `web_search_mode` | `disabled` / `cached` / `live` | `live` |
 | **Review-only** | | |
 | `github_approval_token` | GitHub user PAT (e.g. `secrets.DOTBOT_GITHUB_USER_PAT`) owned by a machine user such as `dotCMS-Machine-User`. When every reviewer model reports `Overall: patch is correct`, dotbot approves the PR as that user; when unset (or any model dissents) reviews post as normal comments with no approval | *(unset)* |
@@ -299,6 +300,7 @@ Environment variables of note:
 |----------|---------|
 | `GITHUB_TOKEN` / `GH_TOKEN` | GitHub API token used for review comments (required) |
 | `DOTBOT_GITHUB_USER_PAT` | Optional PAT owned by the machine user; enables auto-approval when all reviewers agree (see [Automatic PR Approval](#automatic-pr-approval)) |
+| `DOTBOT_MODEL_TIMEOUT_SECONDS` | Per-reviewer-model wall-clock budget in seconds (0 disables) | `900` |
 | `OPENROUTER_API_KEY` | OpenRouter API key (required for the default provider) |
 | `OPENAI_API_KEY` | Legacy provider key (`DOTBOT_PROVIDER=openai`) |
 

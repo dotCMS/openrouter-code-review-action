@@ -303,3 +303,112 @@ def test_invalid_reasoning_effort_falls_back_to_medium(tmp_path: Path) -> None:
     client.execute_text("hello", reasoning_effort="extreme")
 
     assert transport.payloads[0]["reasoning"] == {"effort": "medium"}
+
+
+def test_summarize_tool_call_formats_common_tools() -> None:
+    from cli.clients.openrouter_client import _summarize_tool_call
+
+    assert (
+        _summarize_tool_call("run_command", json.dumps({"command": "git diff main...HEAD"}))
+        == "git diff main...HEAD"
+    )
+    assert (
+        _summarize_tool_call("read_file", json.dumps({"path": "src/main.py"}))
+        == "path='src/main.py'"
+    )
+    assert (
+        _summarize_tool_call("write_file", json.dumps({"path": "a.py", "content": "x" * 10}))
+        == "path='a.py' (10 chars)"
+    )
+    # Long commands are truncated.
+    long_command = "git log " + "a" * 500
+    summary = _summarize_tool_call("run_command", json.dumps({"command": long_command}))
+    assert len(summary) <= 120
+    assert summary.endswith("...")
+    # Malformed JSON degrades to a raw-arguments dump, never raises.
+    assert _summarize_tool_call("run_command", "{not json") == "{not json"
+
+
+def test_debug_level_1_logs_tool_calls_and_usage(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    transport = _ScriptedTransport(
+        [
+            _tool_response("call-1", "run_command", json.dumps({"command": "git diff main"})),
+            _text_response("all done"),
+        ]
+    )
+    # Attach usage to both responses.
+    transport.responses[0]["usage"] = {"prompt_tokens": 100, "completion_tokens": 40}
+    transport.responses[1]["usage"] = {"prompt_tokens": 200, "completion_tokens": 60}
+    client = _client(tmp_path, transport, debug_level=1)
+
+    client.execute_text("inspect the repo")
+
+    stderr = capsys.readouterr().err
+    assert "[openrouter-tool] run_command: git diff main" in stderr
+    assert "[openrouter-request] model=anthropic/claude-opus-4.7 request#1 elapsed=" in stderr
+    assert (
+        "[openrouter-usage] model=anthropic/claude-opus-4.7 requests=2 "
+        "prompt_tokens=300 completion_tokens=100 total_tokens=0"
+    ) in stderr
+
+
+def test_no_usage_summary_without_usage_data(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    transport = _ScriptedTransport([_text_response("all done")])
+    client = _client(tmp_path, transport, debug_level=1)
+
+    client.execute_text("inspect the repo")
+
+    assert "[openrouter-usage]" not in capsys.readouterr().err
+
+
+def _reasoning_chunk(reasoning: str) -> dict[str, Any]:
+    return {"choices": [{"index": 0, "delta": {"reasoning": reasoning}}]}
+
+
+def test_reasoning_chars_summarized_in_stream_logs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def _frame(payload: dict[str, Any]) -> bytes:
+        return f"data: {json.dumps(payload)}\n\n".encode()
+
+    def _content(text: str, finish: str) -> dict[str, Any]:
+        return {"choices": [{"index": 0, "delta": {"content": text}, "finish_reason": finish}]}
+
+    def _stream_transport(payload: dict[str, Any]) -> Any:
+        yield _frame(_reasoning_chunk("thinking hard..."))
+        yield _frame(_content("final answer", "stop"))
+
+    config = _config(tmp_path, debug_level=1, stream_output=True)
+    client = OpenRouterClient(
+        config,
+        stream_transport=_stream_transport,
+        thread_store=OpenRouterThreadStore(tmp_path / "threads"),
+    )
+
+    assert client.execute_text("inspect the repo") == "final answer"
+
+    stderr = capsys.readouterr().err
+    assert "[openrouter-reasoning] 16 chars of reasoning tokens this request" in stderr
+
+
+def test_schema_turn_logs_elapsed_and_accumulates_usage(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    transport = _ScriptedTransport(
+        [
+            _text_response("thinking"),
+            _text_response('{"overall_correctness": "patch is correct"}'),
+        ]
+    )
+    transport.responses[1]["usage"] = {"prompt_tokens": 10, "completion_tokens": 5}
+    client = _client(tmp_path, transport, debug_level=1)
+
+    client.execute_structured("review", output_schema={"type": "object"})
+
+    stderr = capsys.readouterr().err
+    assert "(schema turn) elapsed=" in stderr
+    assert "prompt_tokens=10" in stderr

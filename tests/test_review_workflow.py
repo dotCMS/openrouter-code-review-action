@@ -2009,3 +2009,83 @@ def test_process_review_approval_failure_is_nonfatal(
 
     assert result.summary.overall_correctness == "patch is correct"
     assert len(pr.as_issue().created_comments) == 1
+
+
+class _SlowModelClient:
+    """Model client that takes `delay` seconds per structured call."""
+
+    def __init__(self, response: str, delay: float) -> None:
+        self.response = response
+        self.delay = delay
+
+    def execute_structured(
+        self,
+        prompt: str,
+        *,
+        output_schema: dict[str, object],
+        schema_prompt: str,
+        sandbox_mode: str,
+        model_name: str | None = None,
+        resume_thread_id: str | None = None,
+    ) -> str:
+        import time
+
+        time.sleep(self.delay)
+        return self.response
+
+
+def test_process_review_model_timeout_aborts_slow_reviewer(tmp_path: Path) -> None:
+    (tmp_path / "src.py").write_text("new\n", encoding="utf-8")
+    pr = _FakePR(changed_files=[_FakeChangedFile("src.py", patch="@@ -1 +1 @@\n-old\n+new\n")])
+    github_client = _FakeGitHubClient(pr)
+    model_client = _SlowModelClient(_correct_response(), delay=2.0)
+    config = _make_config(tmp_path)
+    config.model_timeout_seconds = 1
+    workflow = ReviewWorkflow(
+        config,
+        github_client=cast(Any, github_client),
+        model_client=cast(Any, model_client),
+    )
+
+    with pytest.raises(DotBotExecutionError, match="exceeded the 1s wall-clock budget"):
+        workflow.process_review(7)
+
+
+def test_process_review_model_timeout_zero_disables_cap(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "src.py").write_text("new\n", encoding="utf-8")
+    pr = _FakePR(changed_files=[_FakeChangedFile("src.py", patch="@@ -1 +1 @@\n-old\n+new\n")])
+    github_client = _FakeGitHubClient(pr)
+    model_client = _SlowModelClient(_correct_response(), delay=0.2)
+    config = _make_config(tmp_path)
+    config.model_timeout_seconds = 0
+    workflow = ReviewWorkflow(
+        config,
+        github_client=cast(Any, github_client),
+        model_client=cast(Any, model_client),
+    )
+
+    result = workflow.process_review(7)
+
+    assert result.summary.overall_correctness == "patch is correct"
+    assert f"Reviewer {DEFAULT_REVIEW_MODEL} finished in" in capsys.readouterr().out
+
+
+def test_process_review_logs_reviewer_elapsed_time(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "src.py").write_text("new\n", encoding="utf-8")
+    pr = _FakePR(changed_files=[_FakeChangedFile("src.py", patch="@@ -1 +1 @@\n-old\n+new\n")])
+    github_client = _FakeGitHubClient(pr)
+    model_client = _MultiResponseModelClient([_correct_response()])
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path),
+        github_client=cast(Any, github_client),
+        model_client=cast(Any, model_client),
+    )
+
+    workflow.process_review(7)
+
+    out = capsys.readouterr().out
+    assert f"Reviewer {DEFAULT_REVIEW_MODEL} finished in 0." in out

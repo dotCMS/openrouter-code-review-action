@@ -5,6 +5,8 @@ import os
 import re
 import subprocess
 import sys
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -745,6 +747,74 @@ class ReviewWorkflow:
             prior_dotbot_comments=prior_dotbot_comments,
         )
 
+    def _execute_model_under_timeout(
+        self,
+        prompt: str,
+        *,
+        output_schema: dict[str, object],
+        schema_prompt: str,
+        resume_thread_id: str | None,
+        model: str,
+    ) -> str:
+        """Run the model pass, bounded by the configured wall-clock budget.
+
+        ``DOTBOT_MODEL_TIMEOUT_SECONDS`` (0 disables) caps a single
+        reviewer model pass. A wedged stream or an over-enthusiastic tool
+        loop otherwise has no natural ceiling — the per-socket HTTP timeout
+        only fires on *idle* connections, so a trickling reasoning trace can
+        spin indefinitely. On expiry the pass raises and the run fails fast
+        instead of burning credits for an hour; the underlying request is
+        abandoned when the process exits.
+        """
+        effective_model = (
+            self.config.model_name if self.config.model_provider == "openai" else model
+        )
+        timeout_seconds = self.config.model_timeout_seconds
+        started = time.monotonic()
+
+        def _run() -> str:
+            return self.model_client.execute_structured(
+                prompt,
+                model_name=effective_model,
+                sandbox_mode="danger-full-access",
+                output_schema=output_schema,
+                schema_prompt=schema_prompt,
+                resume_thread_id=resume_thread_id,
+            )
+
+        if timeout_seconds <= 0:
+            output = _run()
+            elapsed = time.monotonic() - started
+            print(f"Reviewer {effective_model} finished in {elapsed:.1f}s")
+            return output
+
+        output_box: list[str] = []
+        error_box: list[BaseException] = []
+
+        def _worker() -> None:
+            try:
+                output_box.append(_run())
+            except BaseException as exc:  # noqa: BLE001 — re-raised on the main thread
+                error_box.append(exc)
+
+        # Daemon thread: when the budget expires we abandon the request;
+        # a non-daemon worker (or ThreadPoolExecutor's atexit join) would
+        # otherwise block process exit until the stream dries up.
+        worker = threading.Thread(target=_worker, daemon=True)
+        worker.start()
+        worker.join(timeout=timeout_seconds)
+        if worker.is_alive():
+            raise DotBotExecutionError(
+                f"Reviewer {effective_model} exceeded the "
+                f"{timeout_seconds}s wall-clock budget "
+                "(DOTBOT_MODEL_TIMEOUT_SECONDS); aborting"
+            )
+        if error_box:
+            raise error_box[0]
+        elapsed = time.monotonic() - started
+        print(f"Reviewer {effective_model} finished in {elapsed:.1f}s")
+        return output_box[0]
+
     def _sanitize_review_result(
         self,
         result: ReviewRunResult,
@@ -1045,13 +1115,12 @@ class ReviewWorkflow:
         effective_model = (
             self.config.model_name if self.config.model_provider == "openai" else model
         )
-        output = self.model_client.execute_structured(
+        output = self._execute_model_under_timeout(
             prompt,
-            model_name=effective_model,
-            sandbox_mode="danger-full-access",
             output_schema=REVIEW_OUTPUT_SCHEMA,
             schema_prompt=schema_prompt,
             resume_thread_id=resume_state.resume_thread_id if resume_state is not None else None,
+            model=model,
         )
 
         parsed_result = self._sanitize_review_result(

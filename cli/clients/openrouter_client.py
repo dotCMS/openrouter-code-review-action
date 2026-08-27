@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -76,6 +77,43 @@ _TOOL_ITERATION_LIMIT_MESSAGE = (
     "Tool iteration limit reached. Do not call any more tools; respond with your final answer now."
 )
 
+# Cap on the one-line tool-argument summary printed at debug level 1.
+_TOOL_SUMMARY_ARG_LIMIT = 120
+
+
+def _summarize_tool_call(name: str, arguments_json: str) -> str:
+    """Render a short, readable summary of a tool call for CI logs.
+
+    Shows what the model is doing (the git command, the file being read,
+    the file being written) without dumping full file contents.
+    """
+    try:
+        arguments = json.loads(arguments_json) if arguments_json.strip() else {}
+    except json.JSONDecodeError:
+        # Malformed arguments: show the raw payload (truncated) rather than
+        # claiming the argument was simply missing.
+        detail = arguments_json
+        if len(detail) > _TOOL_SUMMARY_ARG_LIMIT:
+            detail = detail[: _TOOL_SUMMARY_ARG_LIMIT - 3] + "..."
+        return detail
+    if not isinstance(arguments, dict):
+        arguments = {}
+    if name == "run_command":
+        command = arguments.get("command")
+        detail = command if isinstance(command, str) else "<missing command>"
+    elif name == "read_file":
+        detail = f"path={arguments.get('path', '<missing>')!r}"
+    elif name == "write_file":
+        path = arguments.get("path")
+        content = arguments.get("content")
+        length = len(content) if isinstance(content, str) else "?"
+        detail = f"path={path!r} ({length} chars)"
+    else:
+        detail = arguments_json
+    if len(detail) > _TOOL_SUMMARY_ARG_LIMIT:
+        detail = detail[: _TOOL_SUMMARY_ARG_LIMIT - 3] + "..."
+    return detail
+
 
 class OpenRouterClient:
     """Client for executing OpenRouter models with typed streaming and tool use."""
@@ -97,6 +135,48 @@ class OpenRouterClient:
             OpenRouterThreadStore.default_directory()
         )
         self._max_tool_iterations = max(1, max_tool_iterations)
+        self._usage_totals: dict[str, int] = {}
+        self._request_count = 0
+
+    # ------------------------------------------------------------------
+    # Observability (usage / request timing)
+    # ------------------------------------------------------------------
+
+    def _begin_usage_window(self) -> None:
+        self._usage_totals = {}
+        self._request_count = 0
+
+    def _accumulate_usage(self, usage: dict[str, Any] | None) -> None:
+        if not isinstance(usage, dict):
+            return
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            value = usage.get(key)
+            if isinstance(value, int):
+                self._usage_totals[key] = self._usage_totals.get(key, 0) + value
+
+    def _log_request(
+        self, result: StreamingResult, *, model_name: str | None, elapsed: float
+    ) -> None:
+        self._request_count += 1
+        self._accumulate_usage(result.usage)
+        self._debug(
+            1,
+            f"[openrouter-request] model={self._resolved_model(model_name, online_suffix=False)} "
+            f"request#{self._request_count} elapsed={elapsed:.1f}s "
+            f"finish={result.finish_reason or 'n/a'}",
+        )
+
+    def _log_usage_summary(self, *, model_name: str | None) -> None:
+        if not self._usage_totals:
+            return
+        model = self._resolved_model(model_name, online_suffix=False)
+        self._debug(
+            1,
+            f"[openrouter-usage] model={model} requests={self._request_count} "
+            f"prompt_tokens={self._usage_totals.get('prompt_tokens', 0)} "
+            f"completion_tokens={self._usage_totals.get('completion_tokens', 0)} "
+            f"total_tokens={self._usage_totals.get('total_tokens', 0)}",
+        )
 
     # ------------------------------------------------------------------
     # Public API (CodexClient parity)
@@ -113,6 +193,7 @@ class OpenRouterClient:
         resume_thread_id: str | None = None,
     ) -> str:
         """Run an agentic turn and return the final agent text."""
+        self._begin_usage_window()
         messages, thread_id = self._start_thread(resume_thread_id)
         messages.append({"role": "user", "content": prompt})
 
@@ -128,6 +209,7 @@ class OpenRouterClient:
 
         if not final_text.strip():
             raise DotBotExecutionError("OpenRouter did not return an agent message.")
+        self._log_usage_summary(model_name=model_name)
         return final_text
 
     def execute_structured(
@@ -143,6 +225,7 @@ class OpenRouterClient:
         resume_thread_id: str | None = None,
     ) -> str:
         """Run an agentic turn followed by a schema-enforced output turn."""
+        self._begin_usage_window()
         messages, thread_id = self._start_thread(resume_thread_id)
         messages.append({"role": "user", "content": prompt})
 
@@ -169,6 +252,7 @@ class OpenRouterClient:
 
         if not content.strip():
             raise DotBotExecutionError("OpenRouter did not return structured output on turn 2.")
+        self._log_usage_summary(model_name=model_name)
         return content
 
     # ------------------------------------------------------------------
@@ -185,12 +269,14 @@ class OpenRouterClient:
         stream_enabled: bool,
     ) -> str:
         for _ in range(self._max_tool_iterations):
+            started = time.monotonic()
             result = self._agent_request(
                 messages,
                 model_name=model_name,
                 reasoning_effort=reasoning_effort,
                 stream_enabled=stream_enabled,
             )
+            self._log_request(result, model_name=model_name, elapsed=time.monotonic() - started)
             tool_calls = _tool_calls_list(result)
 
             if not tool_calls:
@@ -199,13 +285,18 @@ class OpenRouterClient:
 
             messages.append(_assistant_message(text=result.text, tool_calls=tool_calls))
             for call in tool_calls:
+                tool_name = _tool_call_name(call)
+                self._debug(
+                    1,
+                    f"[openrouter-tool] {tool_name}: {_summarize_tool_call(tool_name, _tool_call_arguments(call))}",
+                )
                 output = execute_tool(
-                    _tool_call_name(call),
+                    tool_name,
                     _tool_call_arguments(call),
                     repo_root=self.config.resolved_repo_root,
                     sandbox_mode=sandbox_mode,
                 )
-                self._debug(2, f"[openrouter-tool] {_tool_call_name(call)} -> {len(output)} chars")
+                self._debug(2, f"[openrouter-tool] {tool_name} -> {len(output)} chars")
                 messages.append(
                     {
                         "role": "tool",
@@ -269,7 +360,18 @@ class OpenRouterClient:
             "reasoning": {"effort": self._resolve_effort(reasoning_effort)},
             "stream": False,
         }
+        started = time.monotonic()
         response = self._request(payload)
+        elapsed = time.monotonic() - started
+        usage = response.get("usage")
+        if isinstance(usage, dict):
+            self._accumulate_usage(usage)
+        self._request_count += 1
+        self._debug(
+            1,
+            f"[openrouter-request] model={self._resolved_model(model_name, online_suffix=False)} "
+            f"request#{self._request_count} (schema turn) elapsed={elapsed:.1f}s",
+        )
         choices = response.get("choices")
         if not isinstance(choices, list) or not choices:
             raise DotBotExecutionError("OpenRouter response had no choices")
@@ -318,11 +420,25 @@ class OpenRouterClient:
             chunks = self._stream_transport({**payload, "stream": True})
         else:
             chunks = self._urllib_stream_chunks({**payload, "stream": True})
+        reasoning_chars = 0
+
+        def _on_reasoning(chunk: str) -> None:
+            nonlocal reasoning_chars
+            reasoning_chars += len(chunk)
+
         printer = OpenRouterStreamPrinter(
             stream_to_logs=True,
             debug=self._debug,
+            on_reasoning_delta=_on_reasoning,
         )
-        return printer.consume_bytes(chunks)
+        result = printer.consume_bytes(chunks)
+        if reasoning_chars:
+            self._debug(
+                1,
+                f"[openrouter-reasoning] {reasoning_chars} chars of reasoning tokens this request "
+                "(hidden from CI logs; rerun with DEBUG_CODEREVIEW=2 for per-delta traces)",
+            )
+        return result
 
     def _urllib_stream_chunks(self, payload: dict[str, Any]) -> Iterable[bytes]:
         body = json.dumps(payload).encode("utf-8")
