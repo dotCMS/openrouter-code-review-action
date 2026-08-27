@@ -19,6 +19,7 @@ from .model_config import (
 _CONFIG_OVERRIDE_KEYS = frozenset(
     {
         "github_token",
+        "github_approval_token",
         "repository",
         "pr_number",
         "mode",
@@ -60,6 +61,7 @@ _VALID_COMMENTER_ASSOCIATIONS = frozenset(
 
 class _ReviewConfigValues(TypedDict):
     github_token: str
+    github_approval_token: str
     repository: str
     pr_number: int | None
     mode: str
@@ -109,6 +111,10 @@ class ReviewConfig:
     repo_root: Path | None = None
     context_dir_name: str = ".dotbot-context"
     allowed_commenter_associations: tuple[str, ...] = _DEFAULT_ALLOWED_COMMENTER_ASSOCIATIONS
+    # PAT owned by the machine user (e.g. dotCMS-Machine-User); when set and
+    # every reviewer model agrees the patch is correct, the PR is approved as
+    # that user. Empty disables auto-approval.
+    github_approval_token: str = ""
 
     @classmethod
     def from_environment(cls) -> ReviewConfig:
@@ -337,6 +343,7 @@ def _parse_model_list(value: str | None) -> tuple[str, ...]:
 
 def _config_values_from_environment() -> _ReviewConfigValues:
     github_token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
+    github_approval_token = os.environ.get("DOTBOT_GITHUB_USER_PAT", "").strip()
     repository = os.environ.get("GITHUB_REPOSITORY", "").strip()
     openai_api_key = os.environ.get("OPENAI_API_KEY", "").strip()
 
@@ -353,6 +360,7 @@ def _config_values_from_environment() -> _ReviewConfigValues:
 
     return {
         "github_token": github_token,
+        "github_approval_token": github_approval_token,
         "repository": repository,
         "pr_number": pr_number,
         "mode": os.environ.get("DOTBOT_MODE", "review").strip(),
@@ -429,6 +437,10 @@ def _apply_config_overrides(values: _ReviewConfigValues, kwargs: Mapping[str, An
     github_token = kwargs.get("github_token")
     if github_token is not None:
         values["github_token"] = github_token
+
+    github_approval_token = kwargs.get("github_approval_token")
+    if github_approval_token is not None:
+        values["github_approval_token"] = str(github_approval_token).strip()
 
     repository = kwargs.get("repository")
     if repository is not None:

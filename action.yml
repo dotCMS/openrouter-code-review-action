@@ -16,6 +16,14 @@ inputs:
   openrouter_api_key:
     description: "OpenRouter API key used for all routed model calls"
     required: false
+  github_approval_token:
+    description: >-
+      GitHub user PAT owned by the machine user (e.g. dotCMS-Machine-User).
+      When every reviewer model reports "Overall: patch is correct", dotbot
+      approves the PR as that user. Leave empty (secret DOTBOT_GITHUB_USER_PAT
+      unset) to disable auto-approval and just post review comments normally.
+    required: false
+    default: ""
   config_path:
     description: >-
       Path (relative to the consuming repo's checkout) to the in-repo OpenRouter
@@ -134,6 +142,7 @@ runs:
       env:
         # Tokens
         GITHUB_TOKEN: ${{ github.token }}
+        DOTBOT_GITHUB_USER_PAT: ${{ inputs.github_approval_token }}
         OPENAI_API_KEY: ${{ inputs.openai_api_key }}
         OPENROUTER_API_KEY: ${{ inputs.openrouter_api_key }}
         # Config

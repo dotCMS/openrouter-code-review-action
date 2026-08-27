@@ -1820,3 +1820,192 @@ def test_process_review_drops_invalid_carried_forward_comment_ids(tmp_path: Path
 
     assert result.review.carried_forward_comment_ids == ["comment-1"]
     assert result.summary.carried_forward_count == 1
+
+
+class _MultiResponseModelClient:
+    """Model client that returns a canned response per roster slot."""
+
+    def __init__(self, responses: list[str]) -> None:
+        self.responses = responses
+        self.calls: list[dict[str, Any]] = []
+
+    def execute_structured(
+        self,
+        prompt: str,
+        *,
+        output_schema: dict[str, object],
+        schema_prompt: str,
+        sandbox_mode: str,
+        model_name: str | None = None,
+        resume_thread_id: str | None = None,
+    ) -> str:
+        self.calls.append({"model_name": model_name})
+        return self.responses[len(self.calls) - 1]
+
+
+def _correct_response() -> str:
+    return json.dumps(
+        {
+            "overall_correctness": "patch is correct",
+            "overall_explanation": "",
+            "overall_confidence_score": 0.9,
+            "carried_forward": [],
+            "findings": [],
+        }
+    )
+
+
+def _incorrect_response() -> str:
+    return json.dumps(
+        {
+            "overall_correctness": "patch is incorrect",
+            "overall_explanation": "Has issues.",
+            "overall_confidence_score": 0.7,
+            "carried_forward": [],
+            "findings": [],
+        }
+    )
+
+
+def _patch_approval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[dict[str, Any]]:
+    """Replace ``submit_pr_approval`` in the workflow namespace with a spy."""
+    calls: list[dict[str, Any]] = []
+
+    def _fake_submit_pr_approval(**kwargs: Any) -> Any:
+        calls.append(kwargs)
+        from cli.review.approval import ApprovalOutcome
+
+        return ApprovalOutcome(submitted=True, login="dotCMS-Machine-User")
+
+    monkeypatch.setattr(
+        "cli.workflows.review_workflow.submit_pr_approval", _fake_submit_pr_approval
+    )
+    return calls
+
+
+def test_process_review_approves_pr_when_all_models_correct(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "src.py").write_text("new\n", encoding="utf-8")
+    pr = _FakePR(changed_files=[_FakeChangedFile("src.py", patch="@@ -1 +1 @@\n-old\n+new\n")])
+    github_client = _FakeGitHubClient(pr)
+    model_client = _MultiResponseModelClient([_correct_response(), _correct_response()])
+    config = _make_config(tmp_path, review_models=("openai/gpt-5",))
+    config.github_approval_token = "machine-user-pat"
+    workflow = ReviewWorkflow(
+        config,
+        github_client=cast(Any, github_client),
+        model_client=cast(Any, model_client),
+    )
+    approval_calls = _patch_approval(monkeypatch)
+
+    workflow.process_review(7)
+
+    assert len(approval_calls) == 1
+    call = approval_calls[0]
+    assert call["repository"] == "owner/repo"
+    assert call["pr_number"] == 7
+    assert call["head_sha"] == "head-sha"
+    assert call["token"] == "machine-user-pat"
+    assert DEFAULT_REVIEW_MODEL in call["body"]
+    assert "openai/gpt-5" in call["body"]
+
+
+def test_process_review_skips_approval_when_any_model_dissents(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "src.py").write_text("new\n", encoding="utf-8")
+    pr = _FakePR(changed_files=[_FakeChangedFile("src.py", patch="@@ -1 +1 @@\n-old\n+new\n")])
+    github_client = _FakeGitHubClient(pr)
+    model_client = _MultiResponseModelClient([_correct_response(), _incorrect_response()])
+    config = _make_config(tmp_path, review_models=("openai/gpt-5",))
+    config.github_approval_token = "machine-user-pat"
+    workflow = ReviewWorkflow(
+        config,
+        github_client=cast(Any, github_client),
+        model_client=cast(Any, model_client),
+    )
+    approval_calls = _patch_approval(monkeypatch)
+
+    workflow.process_review(7)
+
+    assert approval_calls == []
+    # Review summaries still posted normally.
+    assert len(pr.as_issue().created_comments) == 2
+
+
+def test_process_review_without_token_skips_approval_but_posts_comments(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "src.py").write_text("new\n", encoding="utf-8")
+    pr = _FakePR(changed_files=[_FakeChangedFile("src.py", patch="@@ -1 +1 @@\n-old\n+new\n")])
+    github_client = _FakeGitHubClient(pr)
+    model_client = _MultiResponseModelClient([_correct_response()])
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path),
+        github_client=cast(Any, github_client),
+        model_client=cast(Any, model_client),
+    )
+    approval_calls = _patch_approval(monkeypatch)
+
+    workflow.process_review(7)
+
+    assert approval_calls == []
+    assert len(pr.as_issue().created_comments) == 1
+
+
+def test_process_review_dry_run_does_not_submit_approval(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "src.py").write_text("new\n", encoding="utf-8")
+    pr = _FakePR(changed_files=[_FakeChangedFile("src.py", patch="@@ -1 +1 @@\n-old\n+new\n")])
+    github_client = _FakeGitHubClient(pr)
+    model_client = _MultiResponseModelClient([_correct_response()])
+    config = _make_config(tmp_path, dry_run=True)
+    config.github_approval_token = "machine-user-pat"
+    workflow = ReviewWorkflow(
+        config,
+        github_client=cast(Any, github_client),
+        model_client=cast(Any, model_client),
+    )
+    approval_calls = _patch_approval(monkeypatch)
+
+    workflow.process_review(7)
+
+    assert approval_calls == []
+    assert "DRY_RUN: would approve PR" in capsys.readouterr().out
+
+
+def test_process_review_approval_failure_is_nonfatal(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "src.py").write_text("new\n", encoding="utf-8")
+    pr = _FakePR(changed_files=[_FakeChangedFile("src.py", patch="@@ -1 +1 @@\n-old\n+new\n")])
+    github_client = _FakeGitHubClient(pr)
+    model_client = _MultiResponseModelClient([_correct_response()])
+
+    def _boom(**kwargs: Any) -> Any:
+        raise RuntimeError("approval exploded")
+
+    monkeypatch.setattr("cli.workflows.review_workflow.submit_pr_approval", _boom)
+
+    config = _make_config(tmp_path)
+    config.github_approval_token = "machine-user-pat"
+    workflow = ReviewWorkflow(
+        config,
+        github_client=cast(Any, github_client),
+        model_client=cast(Any, model_client),
+    )
+
+    result = workflow.process_review(7)
+
+    assert result.summary.overall_correctness == "patch is correct"
+    assert len(pr.as_issue().created_comments) == 1

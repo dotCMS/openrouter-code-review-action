@@ -34,6 +34,7 @@ from ..core.models import (
 from ..core.review_state import PriorReviewKey
 from ..core.sha_delta import ShaDeltaResolver, ShaDeltaResult
 from ..review.anchor_engine import build_anchor_maps
+from ..review.approval import build_approval_body, submit_pr_approval
 from ..review.artifacts import ReviewArtifacts
 from ..review.context_manager import ReviewContextWriter
 from ..review.dedupe import (
@@ -900,7 +901,74 @@ class ReviewWorkflow:
                 results.append(result)
             finally:
                 self.config.review_model = original_model
+        self._maybe_approve_pr(pr, results=results, roster=roster, head_sha=head_sha)
         return results[-1]
+
+    _OVERALL_CORRECT = "patch is correct"
+
+    def _maybe_approve_pr(
+        self,
+        pr: PullRequestLikeProtocol,
+        *,
+        results: list[ReviewWorkflowResult],
+        roster: tuple[str, ...],
+        head_sha: str,
+    ) -> None:
+        """Approve the PR as the machine user when every reviewer agrees it is correct.
+
+        Requires ``github_approval_token`` (a PAT owned by the machine user,
+        e.g. dotCMS-Machine-User). Only fires when *every* model in the
+        roster reported ``Overall: patch is correct`` — a single dissent
+        (or any active finding) withholds the approval. Failures to submit
+        are logged as warnings; they never fail the review run itself.
+        """
+        unanimous = bool(results) and all(
+            result.summary.overall_correctness.strip().casefold()
+            == self._OVERALL_CORRECT.casefold()
+            for result in results
+        )
+        if not unanimous:
+            self._debug(
+                1,
+                "Skipping PR approval: not every reviewer model reported "
+                f"{self._OVERALL_CORRECT!r}",
+            )
+            return
+
+        approval_token = self.config.github_approval_token.strip()
+        if not approval_token:
+            self._debug(
+                1,
+                "All reviewers agree the patch is correct; no approval token "
+                "configured (set DOTBOT_GITHUB_USER_PAT to enable auto-approval)",
+            )
+            return
+
+        body = build_approval_body(list(roster))
+        if self.config.dry_run:
+            self._debug(1, "DRY_RUN: would submit APPROVE review as machine user")
+            print(f"DRY_RUN: would approve PR #{pr.number} as the machine user:")
+            print(body)
+            return
+
+        try:
+            outcome = submit_pr_approval(
+                repository=self.config.repository,
+                pr_number=pr.number,
+                head_sha=head_sha,
+                token=approval_token,
+                body=body,
+                debug=self._debug,
+            )
+        except Exception as exc:  # noqa: BLE001 — approval must never fail the review
+            print(f"Warning: failed to submit PR approval: {exc}", file=sys.stderr)
+            return
+        if outcome.submitted:
+            print(
+                f"Approved PR #{pr.number} as {outcome.login}: all reviewers agree the patch is correct"
+            )
+        elif outcome.reason == "already_approved":
+            print(f"PR #{pr.number} already approved by {outcome.login} for {head_sha}")
 
     def _refresh_context_artifacts(
         self,
