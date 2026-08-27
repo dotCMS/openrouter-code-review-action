@@ -34,7 +34,24 @@ jobs:
         with:
           mode: review
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
+          github_approval_token: ${{ secrets.DOTBOT_GITHUB_USER_PAT }}
 ```
+
+### Automatic PR Approval
+
+If the `DOTBOT_GITHUB_USER_PAT` secret is set (passed via the
+`github_approval_token` input), the action approves the PR **as the PAT's
+user** — e.g. `dotCMS-Machine-User` — whenever *every* reviewer model in the
+roster concludes `Overall: patch is correct`. The approval is idempotent per
+head commit: re-running the workflow on the same SHA will not spam duplicate
+approvals.
+
+If the secret is not set, or any reviewer model reports a finding, the action
+simply posts its review comments and skips the approval step. Approval
+submission failures are logged as warnings and never fail the review run.
+
+> The PAT needs `pull-requests: write` scope, and its user must differ from
+> the PR author (GitHub rejects approvals from the PR author).
 
 ## Act on `/dotbot` Comments
 
@@ -166,6 +183,7 @@ call time; `cached` and `disabled` skip the live web fetch.
 | `reasoning_effort` | `minimal` / `low` / `medium` / `high` | `medium` |
 | `web_search_mode` | `disabled` / `cached` / `live` | `live` |
 | **Review-only** | | |
+| `github_approval_token` | GitHub user PAT (e.g. `secrets.DOTBOT_GITHUB_USER_PAT`) owned by a machine user such as `dotCMS-Machine-User`. When every reviewer model reports `Overall: patch is correct`, dotbot approves the PR as that user; when unset (or any model dissents) reviews post as normal comments with no approval | *(unset)* |
 | `additional_prompt` | Extra reviewer instructions (verbatim) | |
 | **Act-only** | | |
 | `act_instructions` | Extra guidance appended to the edit prompt | |
@@ -274,6 +292,15 @@ make lint              # format, lint, type-check
 GITHUB_TOKEN=… OPENROUTER_API_KEY=… PYTHONPATH=. python -m cli.main \
   --repo owner/repo --pr 123 --mode review --dry-run
 ```
+
+Environment variables of note:
+
+| Variable | Purpose |
+|----------|---------|
+| `GITHUB_TOKEN` / `GH_TOKEN` | GitHub API token used for review comments (required) |
+| `DOTBOT_GITHUB_USER_PAT` | Optional PAT owned by the machine user; enables auto-approval when all reviewers agree (see [Automatic PR Approval](#automatic-pr-approval)) |
+| `OPENROUTER_API_KEY` | OpenRouter API key (required for the default provider) |
+| `OPENAI_API_KEY` | Legacy provider key (`DOTBOT_PROVIDER=openai`) |
 
 ## Release & Versioning
 

@@ -200,3 +200,31 @@ def test_resolved_repo_root_and_context_dir_defaults(
 
     assert config.resolved_repo_root == tmp_path.resolve()
     assert config.resolved_context_dir_name == ".dotbot-context"
+
+
+def test_github_user_pat_env_populates_approval_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("DOTBOT_GITHUB_USER_PAT", "machine-user-pat")
+    monkeypatch.setenv("PR_NUMBER", "7")
+
+    config = ReviewConfig.from_environment()
+
+    assert config.github_approval_token == "machine-user-pat"
+
+
+def test_approval_token_defaults_empty_without_pat_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_TOKEN", "token")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("PR_NUMBER", "7")
+    monkeypatch.delenv("DOTBOT_GITHUB_USER_PAT", raising=False)
+
+    config = ReviewConfig.from_environment()
+
+    assert config.github_approval_token == ""
