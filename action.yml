@@ -43,6 +43,13 @@ inputs:
     description: "Reasoning effort: minimal | low | medium | high"
     required: false
     default: "medium"
+  model_timeout_seconds:
+    description: >-
+      Wall-clock budget in seconds for each reviewer model pass. A wedged
+      model (endless reasoning trace or tool loop) is aborted instead of
+      burning credits. 0 disables the cap.
+    required: false
+    default: "900"
   web_search_mode:
     description: "Web search mode: disabled | cached | live"
     required: false
@@ -152,6 +159,7 @@ runs:
         # In-repo model config — single edit swaps the review/act model.
         OPENROUTER_REVIEW_CONFIG: ${{ inputs.config_path }}
         DOTBOT_REASONING_EFFORT: ${{ inputs.reasoning_effort }}
+        DOTBOT_MODEL_TIMEOUT_SECONDS: ${{ inputs.model_timeout_seconds }}
         DOTBOT_WEB_SEARCH_MODE: ${{ inputs.web_search_mode }}
         DOTBOT_ACT_INSTRUCTIONS: ${{ inputs.act_instructions }}
         DOTBOT_ALLOWED_COMMENTER_ASSOCIATIONS: ${{ inputs.allowed_commenter_associations }}

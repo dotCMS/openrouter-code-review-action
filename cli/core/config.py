@@ -37,6 +37,7 @@ _CONFIG_OVERRIDE_KEYS = frozenset(
         "debug_level",
         "stream_output",
         "dry_run",
+        "model_timeout_seconds",
         "additional_prompt",
         "repo_root",
         "context_dir_name",
@@ -79,6 +80,7 @@ class _ReviewConfigValues(TypedDict):
     debug_level: int
     stream_output: bool
     dry_run: bool
+    model_timeout_seconds: int
     additional_prompt: str
     repo_root: Path | None
     context_dir_name: str
@@ -107,6 +109,8 @@ class ReviewConfig:
     debug_level: int = 0
     stream_output: bool = True
     dry_run: bool = False
+    # Wall-clock budget for a single reviewer model pass. 0 disables the cap.
+    model_timeout_seconds: int = 900
     additional_prompt: str = ""
     repo_root: Path | None = None
     context_dir_name: str = ".dotbot-context"
@@ -174,6 +178,9 @@ class ReviewConfig:
 
         if self.debug_level < 0:
             raise ConfigurationError("Debug level must be non-negative")
+
+        if self.model_timeout_seconds < 0:
+            raise ConfigurationError("model_timeout_seconds must be non-negative")
 
         if self.web_search_mode not in ("disabled", "cached", "live"):
             raise ConfigurationError(
@@ -325,6 +332,17 @@ def _parse_debug_level(value: str) -> int:
         return 0
 
 
+def _parse_non_negative_int(value: str | None, *, default: int) -> int:
+    """Parse a non-negative int from an env string, falling back to default."""
+    if value is None or not value.strip():
+        return default
+    try:
+        parsed = int(value.strip())
+    except ValueError:
+        return default
+    return parsed if parsed >= 0 else default
+
+
 def _parse_allowed_commenter_associations(value: str | None) -> tuple[str, ...]:
     """Parse a comma-separated GitHub author-association allowlist."""
     if value is None:
@@ -381,6 +399,9 @@ def _config_values_from_environment() -> _ReviewConfigValues:
         "debug_level": _parse_debug_level(os.environ.get("DEBUG_CODEREVIEW", "0")),
         "stream_output": os.environ.get("STREAM_AGENT_MESSAGES", "1") != "0",
         "dry_run": os.environ.get("DRY_RUN") == "1",
+        "model_timeout_seconds": _parse_non_negative_int(
+            os.environ.get("DOTBOT_MODEL_TIMEOUT_SECONDS"), default=900
+        ),
         "additional_prompt": os.environ.get("DOTBOT_ADDITIONAL_PROMPT", "").strip(),
         "repo_root": repo_root,
         "context_dir_name": ".dotbot-context",
