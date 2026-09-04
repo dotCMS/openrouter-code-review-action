@@ -84,7 +84,10 @@ jobs:
       # roster/attestation debugging on PR #860 to run against old code.
       - name: dotbot autonomous review
         id: dotbot
-        uses: dotcms/openrouter-code-review-action@latest
+        # Trusted ref, NOT the PR-head checkout. Update this SHA on each
+        # release (matches the v1/latest tag) — enforced by
+        # tests/test_module_coverage.py.
+        uses: wezell/openrouter-code-review-action@d68edbb67a3365b53b41d9f05406c084bf338295
         with:
           mode: review
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
@@ -92,11 +95,6 @@ jobs:
           reasoning_effort: medium
           web_search_mode: cached
           debug_level: 1
-          # Let the reviewer model close prior dotbot threads it judges
-          # stale/fixed (implemented in the action, PR dotCMS/openrouter-
-          # code-review-action#3): prior unresolved threads are rendered into
-          # the prompt; ones no reviewer carries forward get resolved.
-          resolve_stale_threads: "1"
       # Review finished — flip the status to completed. success/failure
       # reflects the review run itself, not the review's verdict on the patch.
       - name: Set dotbot review status (completed)
