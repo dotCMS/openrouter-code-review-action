@@ -26,14 +26,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      # "Being reviewed by dotBot" is a commit status on the head SHA, not a
+      # NOTE: ovh-k8s-cluster uses secrets.DOTBOT_GITHUB_USER_PAT; this repo's
+# equivalent machine-user PAT is secrets.REPO_ACCESS_TOKEN.
+# "Being reviewed by dotBot" is a commit status on the head SHA, not a
       # PR comment: statuses never send notification emails, and the PR's
       # checks area shows the in-progress state live. (A run cancelled by
       # concurrency leaves its pending status behind; the next run on the
       # same SHA overwrites it.)
       - name: Set "Being reviewed by dotBot" status (pending)
         env:
-          GH_TOKEN: ${{ secrets.DOTBOT_GITHUB_USER_PAT }}
+          GH_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
         run: |
           gh api -X POST "repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }}" \
             -f state=pending \
@@ -84,7 +86,7 @@ jobs:
         with:
           mode: review
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
-          github_approval_token: ${{ secrets.DOTBOT_GITHUB_USER_PAT }}
+          github_approval_token: ${{ secrets.REPO_ACCESS_TOKEN }}
           reasoning_effort: medium
           web_search_mode: cached
           debug_level: 1
@@ -98,7 +100,7 @@ jobs:
       - name: Set dotbot review status (completed)
         if: always()
         env:
-          GH_TOKEN: ${{ secrets.DOTBOT_GITHUB_USER_PAT }}
+          GH_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
           OUTCOME: ${{ steps.dotbot.outcome }}
         run: |
           state=failure
