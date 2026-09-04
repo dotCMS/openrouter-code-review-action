@@ -186,6 +186,7 @@ call time; `cached` and `disabled` skip the live web fetch.
 | **Review-only** | | |
 | `github_approval_token` | GitHub user PAT (e.g. `secrets.DOTBOT_GITHUB_USER_PAT`) owned by a machine user such as `dotCMS-Machine-User`. When every reviewer model reports `Overall: patch is correct`, dotbot approves the PR as that user; when unset (or any model dissents) reviews post as normal comments with no approval | *(unset)* |
 | `additional_prompt` | Extra reviewer instructions (verbatim) | |
+| `resolve_stale_threads` | `0` or `1` — resolve prior unresolved dotbot threads the reviewer model saw but declined to carry forward (judged stale/fixed); threads never shown to the model stay open | `0` |
 | **Act-only** | | |
 | `act_instructions` | Extra guidance appended to the edit prompt | |
 | `allowed_commenter_associations` | Comma-separated GitHub `author_association` values allowed to trigger Act mode | `MEMBER,OWNER,COLLABORATOR` |

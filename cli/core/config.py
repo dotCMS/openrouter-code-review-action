@@ -42,6 +42,7 @@ _CONFIG_OVERRIDE_KEYS = frozenset(
         "repo_root",
         "context_dir_name",
         "allowed_commenter_associations",
+        "resolve_stale_threads",
     }
 )
 
@@ -85,6 +86,7 @@ class _ReviewConfigValues(TypedDict):
     repo_root: Path | None
     context_dir_name: str
     allowed_commenter_associations: tuple[str, ...]
+    resolve_stale_threads: bool
 
 
 @dataclass
@@ -119,6 +121,9 @@ class ReviewConfig:
     # every reviewer model agrees the patch is correct, the PR is approved as
     # that user. Empty disables auto-approval.
     github_approval_token: str = ""
+    # When True, prior unresolved dotbot threads that the reviewer model saw
+    # but declined to carry forward are resolved (closed) on GitHub.
+    resolve_stale_threads: bool = False
 
     @classmethod
     def from_environment(cls) -> ReviewConfig:
@@ -399,6 +404,7 @@ def _config_values_from_environment() -> _ReviewConfigValues:
         "debug_level": _parse_debug_level(os.environ.get("DEBUG_CODEREVIEW", "0")),
         "stream_output": os.environ.get("STREAM_AGENT_MESSAGES", "1") != "0",
         "dry_run": os.environ.get("DRY_RUN") == "1",
+        "resolve_stale_threads": os.environ.get("DOTBOT_RESOLVE_STALE_THREADS", "") == "1",
         "model_timeout_seconds": _parse_non_negative_int(
             os.environ.get("DOTBOT_MODEL_TIMEOUT_SECONDS"), default=900
         ),
@@ -535,6 +541,10 @@ def _apply_config_overrides(values: _ReviewConfigValues, kwargs: Mapping[str, An
     dry_run = kwargs.get("dry_run")
     if dry_run is not None:
         values["dry_run"] = dry_run
+
+    resolve_stale_threads = kwargs.get("resolve_stale_threads")
+    if resolve_stale_threads is not None:
+        values["resolve_stale_threads"] = resolve_stale_threads
 
     additional_prompt = kwargs.get("additional_prompt")
     if additional_prompt is not None:
