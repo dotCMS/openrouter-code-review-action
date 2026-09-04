@@ -22,12 +22,14 @@ jobs:
       contents: read
       pull-requests: write
       issues: write
+      statuses: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      # NOTE: ovh-k8s-cluster uses secrets.DOTBOT_GITHUB_USER_PAT; this repo's
-# equivalent machine-user PAT is secrets.REPO_ACCESS_TOKEN.
+      # NOTE: ovh-k8s-cluster uses secrets.DOTBOT_GITHUB_USER_PAT (a machine-user
+      # PAT) for these statuses; this repo has no such secret, so the workflow
+      # token (statuses: write) is used instead.
 # "Being reviewed by dotBot" is a commit status on the head SHA, not a
       # PR comment: statuses never send notification emails, and the PR's
       # checks area shows the in-progress state live. (A run cancelled by
@@ -35,7 +37,7 @@ jobs:
       # same SHA overwrites it.)
       - name: Set "Being reviewed by dotBot" status (pending)
         env:
-          GH_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           gh api -X POST "repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }}" \
             -f state=pending \
@@ -86,7 +88,7 @@ jobs:
         with:
           mode: review
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
-          github_approval_token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          model: deepseek/deepseek-v4-pro-0813
           reasoning_effort: medium
           web_search_mode: cached
           debug_level: 1
@@ -100,7 +102,7 @@ jobs:
       - name: Set dotbot review status (completed)
         if: always()
         env:
-          GH_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           OUTCOME: ${{ steps.dotbot.outcome }}
         run: |
           state=failure
