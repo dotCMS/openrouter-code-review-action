@@ -1006,10 +1006,13 @@ class ReviewWorkflow:
             for result in results
             for comment_id in result.review.carried_forward_comment_ids
         }
+        # Mirror render_prior_dotbot_comments_for_prompt's 200-comment cap so
+        # we only ever resolve threads the reviewers actually saw.
+        candidates = [comment for comment in prior_comments if comment.is_currently_applicable][
+            :200
+        ]
         stale_thread_ids: list[str] = []
-        for comment in prior_comments:
-            if not comment.is_currently_applicable:
-                continue
+        for comment in candidates:
             if comment.id in carried_ids:
                 continue
             if comment.thread_id not in stale_thread_ids:

@@ -2220,3 +2220,48 @@ def test_process_review_leaves_unseen_stale_thread_open(tmp_path: Path) -> None:
     workflow.process_review(7)
 
     assert github_client.resolved_thread_ids == []
+
+
+def test_process_review_resolves_at_most_200_prior_threads(tmp_path: Path) -> None:
+    # render_prior_dotbot_comments_for_prompt caps the prompt at 200 applicable
+    # prior comments; the stale resolver must not close threads past that cap.
+    (tmp_path / "src.py").write_text("value = 1\n", encoding="utf-8")
+    pr = _FakePR(
+        issue_comments=[
+            _FakeIssueComment(
+                f"{SUMMARY_MARKER}\nold summary",
+                comment_id=10,
+                login="reviewer",
+            )
+        ],
+        review_threads=[
+            ReviewThreadSnapshot(
+                id=f"thread-{index}",
+                is_resolved=False,
+                comments=[
+                    ReviewThreadComment(
+                        id=f"comment-{index}",
+                        body=_structured_review_body("value = 1"),
+                        path="src.py",
+                        line=2,
+                        original_line=2,
+                        author="reviewer",
+                    )
+                ],
+            )
+            for index in range(1, 202)
+        ],
+    )
+    github_client = _FakeGitHubClient(pr)
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path, resolve_stale_threads=True),
+        github_client=cast(Any, github_client),
+        model_client=cast(Any, _FakeCodexClient(_prior_thread_review_response([]))),
+    )
+
+    workflow.process_review(7)
+
+    assert len(github_client.resolved_thread_ids) == 200
+    assert "thread-1" in github_client.resolved_thread_ids
+    assert "thread-200" in github_client.resolved_thread_ids
+    assert "thread-201" not in github_client.resolved_thread_ids
