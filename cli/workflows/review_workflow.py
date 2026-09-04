@@ -950,14 +950,14 @@ class ReviewWorkflow:
         self._debug(1, f"Reviewer roster: {len(roster)} model(s) -> {', '.join(roster)}")
 
         results: list[ReviewWorkflowResult] = []
+        initial_prior_comments: list[PriorDotBotReviewComment] = []
         for index, model in enumerate(roster):
             original_model = self.config.review_model
             self.config.review_model = model
             try:
-                if index > 0:
-                    snapshots = self._capture_review_snapshots(pr, repo_root=repo_root)
-                else:
-                    snapshots = self._capture_review_snapshots(pr, repo_root=repo_root)
+                snapshots = self._capture_review_snapshots(pr, repo_root=repo_root)
+                if index == 0:
+                    initial_prior_comments = snapshots.prior_dotbot_comments
                 self._refresh_context_artifacts(pr, artifacts, snapshots)
                 result = self._run_review_model(
                     pr,
@@ -971,8 +971,66 @@ class ReviewWorkflow:
                 results.append(result)
             finally:
                 self.config.review_model = original_model
+        self._resolve_stale_prior_threads(
+            pr, prior_comments=initial_prior_comments, results=results
+        )
         self._maybe_approve_pr(pr, results=results, roster=roster, head_sha=head_sha)
         return results[-1]
+
+    def _resolve_stale_prior_threads(
+        self,
+        pr: PullRequestLikeProtocol,
+        *,
+        prior_comments: list[PriorDotBotReviewComment],
+        results: list[ReviewWorkflowResult],
+    ) -> None:
+        """Resolve prior dotbot threads every reviewer declined to carry forward.
+
+        Each prior unresolved dotbot thread was rendered into the reviewer
+        prompt, and the reviewers were asked to carry forward the ones that
+        still describe live issues. A thread none of them carried forward is,
+        by the model's own judgment, stale or already fixed — so close it.
+        Threads the reviewers never saw (their current_code no longer matches
+        the file) are left for a human. Failures are logged, never fatal.
+        """
+        if not self.config.resolve_stale_threads:
+            return
+        if self.config.dry_run:
+            self._debug(1, "DRY_RUN: would resolve stale prior dotbot threads")
+            return
+        if not prior_comments or not results:
+            return
+
+        carried_ids = {
+            comment_id
+            for result in results
+            for comment_id in result.review.carried_forward_comment_ids
+        }
+        # Mirror render_prior_dotbot_comments_for_prompt's 200-comment cap so
+        # we only ever resolve threads the reviewers actually saw.
+        candidates = [comment for comment in prior_comments if comment.is_currently_applicable][
+            :200
+        ]
+        stale_thread_ids: list[str] = []
+        for comment in candidates:
+            if comment.id in carried_ids:
+                continue
+            if comment.thread_id not in stale_thread_ids:
+                stale_thread_ids.append(comment.thread_id)
+
+        if not stale_thread_ids:
+            self._debug(1, "No stale prior dotbot threads to resolve")
+            return
+
+        for thread_id in stale_thread_ids:
+            try:
+                self.github_client.resolve_review_thread(pr, thread_id)
+                self._debug(1, f"Resolved stale prior dotbot thread {thread_id}")
+            except Exception as exc:
+                print(
+                    f"Failed to resolve stale prior dotbot thread {thread_id}: {exc}",
+                    file=sys.stderr,
+                )
 
     _OVERALL_CORRECT = "patch is correct"
 

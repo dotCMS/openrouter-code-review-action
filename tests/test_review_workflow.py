@@ -183,6 +183,7 @@ class _FakeGitHubClient:
         # after Sub-AC 3.3.3's batched submission was wired in.
         self.inline_comments: list[dict[str, Any]] = []
         self.batch_review_calls: list[dict[str, Any]] = []
+        self.resolved_thread_ids: list[str] = []
 
     def get_pr(self, pr_number: int) -> _FakePR:
         self.calls.append(pr_number)
@@ -191,6 +192,10 @@ class _FakeGitHubClient:
     def get_review_threads(self, pr: _FakePR) -> list[ReviewThreadSnapshot]:
         assert pr is self.pr
         return list(self.pr._review_threads)
+
+    def resolve_review_thread(self, pr: _FakePR, thread_id: str) -> None:
+        assert pr is self.pr
+        self.resolved_thread_ids.append(thread_id)
 
     def post_inline_comment(
         self,
@@ -259,6 +264,7 @@ def _make_config(
     model_provider: str = "openrouter",
     review_models: tuple[str, ...] = (),
     model_name: str = "gpt-codex-model",
+    resolve_stale_threads: bool = False,
 ) -> ReviewConfig:
     return ReviewConfig(
         github_token="token",
@@ -270,6 +276,7 @@ def _make_config(
         model_name=model_name,
         review_models=review_models,
         repo_root=tmp_path,
+        resolve_stale_threads=resolve_stale_threads,
     )
 
 
@@ -2089,3 +2096,172 @@ def test_process_review_logs_reviewer_elapsed_time(
 
     out = capsys.readouterr().out
     assert f"Reviewer {DEFAULT_REVIEW_MODEL} finished in 0." in out
+
+
+def _prior_thread_review_response(carried_forward: list[dict[str, Any]]) -> str:
+    return json.dumps(
+        {
+            "overall_correctness": "patch is correct",
+            "overall_explanation": "No additional non-redundant findings.",
+            "overall_confidence_score": 0.8,
+            "carried_forward": carried_forward,
+            "findings": [],
+        }
+    )
+
+
+def _prior_thread_pr() -> _FakePR:
+    return _FakePR(
+        issue_comments=[
+            _FakeIssueComment(
+                f"{SUMMARY_MARKER}\nold summary",
+                comment_id=10,
+                login="reviewer",
+            )
+        ],
+        review_threads=[
+            ReviewThreadSnapshot(
+                id="thread-1",
+                is_resolved=False,
+                comments=[
+                    ReviewThreadComment(
+                        id="comment-1",
+                        body=_structured_review_body("value = 1"),
+                        path="src.py",
+                        line=2,
+                        original_line=2,
+                        author="reviewer",
+                    )
+                ],
+            )
+        ],
+    )
+
+
+def test_process_review_resolves_stale_prior_threads_when_enabled(tmp_path: Path) -> None:
+    (tmp_path / "src.py").write_text("value = 1\n", encoding="utf-8")
+    pr = _prior_thread_pr()
+    github_client = _FakeGitHubClient(pr)
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path, resolve_stale_threads=True),
+        github_client=cast(Any, github_client),
+        model_client=cast(Any, _FakeCodexClient(_prior_thread_review_response([]))),
+    )
+
+    workflow.process_review(7)
+
+    assert github_client.resolved_thread_ids == ["thread-1"]
+
+
+def test_process_review_keeps_carried_forward_thread_open(tmp_path: Path) -> None:
+    (tmp_path / "src.py").write_text("value = 1\n", encoding="utf-8")
+    pr = _prior_thread_pr()
+    github_client = _FakeGitHubClient(pr)
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path, resolve_stale_threads=True),
+        github_client=cast(Any, github_client),
+        model_client=cast(
+            Any,
+            _FakeCodexClient(
+                _prior_thread_review_response(
+                    [{"comment_id": "comment-1", "current_evidence": "value = 1"}]
+                )
+            ),
+        ),
+    )
+
+    workflow.process_review(7)
+
+    assert github_client.resolved_thread_ids == []
+
+
+def test_process_review_skips_stale_thread_resolution_when_disabled(tmp_path: Path) -> None:
+    (tmp_path / "src.py").write_text("value = 1\n", encoding="utf-8")
+    pr = _prior_thread_pr()
+    github_client = _FakeGitHubClient(pr)
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path),
+        github_client=cast(Any, github_client),
+        model_client=cast(Any, _FakeCodexClient(_prior_thread_review_response([]))),
+    )
+
+    workflow.process_review(7)
+
+    assert github_client.resolved_thread_ids == []
+
+
+def test_process_review_dry_run_skips_stale_thread_resolution(tmp_path: Path) -> None:
+    (tmp_path / "src.py").write_text("value = 1\n", encoding="utf-8")
+    pr = _prior_thread_pr()
+    github_client = _FakeGitHubClient(pr)
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path, dry_run=True, resolve_stale_threads=True),
+        github_client=cast(Any, github_client),
+        model_client=cast(Any, _FakeCodexClient(_prior_thread_review_response([]))),
+    )
+
+    workflow.process_review(7)
+
+    assert github_client.resolved_thread_ids == []
+
+
+def test_process_review_leaves_unseen_stale_thread_open(tmp_path: Path) -> None:
+    # The thread's current_code ("value = 1") no longer matches the file, so
+    # the reviewer never saw it — it must stay open for a human.
+    (tmp_path / "src.py").write_text("value = 2\n", encoding="utf-8")
+    pr = _prior_thread_pr()
+    github_client = _FakeGitHubClient(pr)
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path, resolve_stale_threads=True),
+        github_client=cast(Any, github_client),
+        model_client=cast(Any, _FakeCodexClient(_prior_thread_review_response([]))),
+    )
+
+    workflow.process_review(7)
+
+    assert github_client.resolved_thread_ids == []
+
+
+def test_process_review_resolves_at_most_200_prior_threads(tmp_path: Path) -> None:
+    # render_prior_dotbot_comments_for_prompt caps the prompt at 200 applicable
+    # prior comments; the stale resolver must not close threads past that cap.
+    (tmp_path / "src.py").write_text("value = 1\n", encoding="utf-8")
+    pr = _FakePR(
+        issue_comments=[
+            _FakeIssueComment(
+                f"{SUMMARY_MARKER}\nold summary",
+                comment_id=10,
+                login="reviewer",
+            )
+        ],
+        review_threads=[
+            ReviewThreadSnapshot(
+                id=f"thread-{index}",
+                is_resolved=False,
+                comments=[
+                    ReviewThreadComment(
+                        id=f"comment-{index}",
+                        body=_structured_review_body("value = 1"),
+                        path="src.py",
+                        line=2,
+                        original_line=2,
+                        author="reviewer",
+                    )
+                ],
+            )
+            for index in range(1, 202)
+        ],
+    )
+    github_client = _FakeGitHubClient(pr)
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path, resolve_stale_threads=True),
+        github_client=cast(Any, github_client),
+        model_client=cast(Any, _FakeCodexClient(_prior_thread_review_response([]))),
+    )
+
+    workflow.process_review(7)
+
+    assert len(github_client.resolved_thread_ids) == 200
+    assert "thread-1" in github_client.resolved_thread_ids
+    assert "thread-200" in github_client.resolved_thread_ids
+    assert "thread-201" not in github_client.resolved_thread_ids

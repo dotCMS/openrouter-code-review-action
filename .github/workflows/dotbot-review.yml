@@ -2,32 +2,111 @@ name: dotbot code review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    # review_requested fires both when a review is first requested AND when
+    # it is re-requested, so one type covers both cases.
+    types: [opened, synchronize, reopened, ready_for_review, review_requested]
 
 concurrency:
-  group: dotbot-review-${{ github.event.pull_request.number || github.ref }}
+  group: dotbot-review-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 jobs:
   review:
-    name: Review
+    # On review_requested, only run when the request targets the machine
+    # user (re-requests land here too). All other trigger types pass through.
+    if: >-
+      github.event.action != 'review_requested' ||
+      github.event.requested_reviewer.login == 'dotCMS-Machine-User'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
       issues: write
+      statuses: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      # NOTE: ovh-k8s-cluster uses secrets.DOTBOT_GITHUB_USER_PAT (a machine-user
+      # PAT) for these statuses; this repo has no such secret, so the workflow
+      # token (statuses: write) is used instead.
+# "Being reviewed by dotBot" is a commit status on the head SHA, not a
+      # PR comment: statuses never send notification emails, and the PR's
+      # checks area shows the in-progress state live. (A run cancelled by
+      # concurrency leaves its pending status behind; the next run on the
+      # same SHA overwrites it.)
+      - name: Set "Being reviewed by dotBot" status (pending)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -X POST "repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }}" \
+            -f state=pending \
+            -f context='dotbot code review' \
+            -f description='Being reviewed by dotBot' \
+            -f target_url='${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+      # DOTBOT_REVIEW_MODELS (repo VARIABLE), when set, OVERRIDES the review
+      # roster: we render .openrouter-review.yml from it and the action reads
+      # that as its primary + extras. This is a REPLACEMENT, not an addition —
+      # the action's `review_models` INPUT is additive (it would run the
+      # variable's models alongside the default deepseek primary, which is how
+      # a 3-reviewer roster happened on PR #843). First entry = primary
+      # reviewer; the rest are the "fight" secondaries. When the variable is
+      # unset, nothing is rendered and the action's own defaults stand.
+      - name: Override review roster from DOTBOT_REVIEW_MODELS (when set)
+        if: ${{ vars.DOTBOT_REVIEW_MODELS != '' }}
+        env:
+          REVIEW_MODELS: ${{ vars.DOTBOT_REVIEW_MODELS }}
+        run: |
+          MODELS=()
+          IFS=',' read -ra PARTS <<< "$REVIEW_MODELS"
+          for p in "${PARTS[@]}"; do
+            p="${p//[[:space:]]/}"
+            [[ -n "${p}" ]] && MODELS+=("${p}")
+          done
+          if (( ${#MODELS[@]} == 0 )); then
+            echo "::warning::DOTBOT_REVIEW_MODELS set but parsed empty — using action defaults"
+            exit 0
+          fi
+          {
+            echo "review:"
+            echo "  model: ${MODELS[0]}"
+            if (( ${#MODELS[@]} > 1 )); then
+              echo "  models:"
+              for m in "${MODELS[@]:1}"; do echo "    - ${m}"; done
+            fi
+          } > .openrouter-review.yml
+          echo "Rendered .openrouter-review.yml from DOTBOT_REVIEW_MODELS:"
+          cat .openrouter-review.yml
+      # Always run the action's latest release via the @latest ref (2026-09-03,
+      # was pinned to SHA a716ed1 = v1.0.1-era). Pinning is the audit-friendly
+      # choice; we deliberately trade that for freshness here — the action only
+      # holds read creds + posts review comments, and stale pins caused the
+      # roster/attestation debugging on PR #860 to run against old code.
       - name: dotbot autonomous review
+        id: dotbot
         # Trusted ref, NOT the PR-head checkout. Update this SHA on each
-        # release (matches the v1/latest tag).
+        # release (matches the v1/latest tag) — enforced by
+        # tests/test_module_coverage.py.
         uses: wezell/openrouter-code-review-action@d68edbb67a3365b53b41d9f05406c084bf338295
         with:
           mode: review
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           model: deepseek/deepseek-v4-pro-0813
-          reasoning_effort: high
-          web_search_mode: live
+          reasoning_effort: medium
+          web_search_mode: cached
           debug_level: 1
+      # Review finished — flip the status to completed. success/failure
+      # reflects the review run itself, not the review's verdict on the patch.
+      - name: Set dotbot review status (completed)
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OUTCOME: ${{ steps.dotbot.outcome }}
+        run: |
+          state=failure
+          [ "$OUTCOME" = "success" ] && state=success
+          gh api -X POST "repos/${{ github.repository }}/statuses/${{ github.event.pull_request.head.sha }}" \
+            -f state="$state" \
+            -f context='dotbot code review' \
+            -f description='dotbot review finished' \
+            -f target_url='${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'

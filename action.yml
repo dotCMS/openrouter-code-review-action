@@ -78,6 +78,14 @@ inputs:
     description: "Extra reviewer instructions appended to the review prompt (verbatim)"
     required: false
     default: ""
+  resolve_stale_threads:
+    description: >-
+      If '1', resolve (close) prior unresolved dotbot review threads that the
+      reviewer model saw but declined to carry forward — i.e. threads the
+      model judged stale or already fixed. Threads whose code no longer
+      matches the file (never shown to the model) are left for a human.
+    required: false
+    default: "0"
   extra_pip_args:
     description: "Additional pip arguments (e.g., --index-url)"
     required: false
@@ -164,6 +172,7 @@ runs:
         DOTBOT_ACT_INSTRUCTIONS: ${{ inputs.act_instructions }}
         DOTBOT_ALLOWED_COMMENTER_ASSOCIATIONS: ${{ inputs.allowed_commenter_associations }}
         DOTBOT_ADDITIONAL_PROMPT: ${{ inputs.additional_prompt }}
+        DOTBOT_RESOLVE_STALE_THREADS: ${{ inputs.resolve_stale_threads }}
         DEBUG_CODEREVIEW: ${{ inputs.debug_level }}
         DRY_RUN: ${{ inputs.dry_run }}
         STREAM_AGENT_MESSAGES: ${{ inputs.stream_agent_messages }}
