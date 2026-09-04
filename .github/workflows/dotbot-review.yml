@@ -86,8 +86,9 @@ jobs:
         id: dotbot
         # Trusted ref, NOT the PR-head checkout. Update this SHA on each
         # release (matches the v1/latest tag) — enforced by
-        # tests/test_module_coverage.py.
-        uses: wezell/openrouter-code-review-action@d68edbb67a3365b53b41d9f05406c084bf338295
+        # tests/test_module_coverage.py. This repo is the canonical home, so
+        # the pin points at itself.
+        uses: dotCMS/openrouter-code-review-action@aa372f5dd31d6fc3cbd50d57af8b49777b77fd5c
         with:
           mode: review
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}

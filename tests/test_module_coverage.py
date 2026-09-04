@@ -783,7 +783,7 @@ def test_review_action_and_workflow_use_expected_resume_guard_and_model() -> Non
     # finding on dotbot-act.yml).
     assert "        uses: ./\n" not in review_workflow
     assert "        uses: ./\n" not in act_workflow
-    assert "wezell/openrouter-code-review-action@" in review_workflow
+    assert "dotCMS/openrouter-code-review-action@" in review_workflow
     assert "wezell/openrouter-code-review-action@" in act_workflow
 
 
