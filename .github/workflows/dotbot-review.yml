@@ -88,7 +88,7 @@ jobs:
         # release (matches the v1/latest tag) — enforced by
         # tests/test_module_coverage.py. This repo is the canonical home, so
         # the pin points at itself.
-        uses: dotCMS/openrouter-code-review-action@a716ed1aaa24814e11ed684901b1f1525e8ee353
+        uses: dotCMS/openrouter-code-review-action@a2b951770da84d9746a11055bed4784c160d3a8f
         with:
           mode: review
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
