@@ -70,9 +70,6 @@ permissions:
   workflows: write       # needed if /dotbot may edit .github/workflows/*
   pull-requests: write
   issues: write
-concurrency:
-  group: dotbot-act-${{ github.event.issue.number || github.event.pull_request.number || github.ref }}
-  cancel-in-progress: false
 jobs:
   act:
     name: Act on /dotbot comments
@@ -88,6 +85,14 @@ jobs:
         )
       ) &&
       github.actor != 'dependabot[bot]'
+    # Job-level, not workflow-level: every comment starts this workflow, and a
+    # workflow-level group is joined even when the job is skipped, so an
+    # ordinary comment would cancel a waiting /dotbot run. queue: max keeps
+    # back-to-back /dotbot requests queued.
+    concurrency:
+      group: dotbot-act-${{ github.event.issue.number || github.event.pull_request.number || github.ref }}
+      cancel-in-progress: false
+      queue: max
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
