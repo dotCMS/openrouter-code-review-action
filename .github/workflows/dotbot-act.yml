@@ -69,13 +69,17 @@ jobs:
             echo "::warning::DOTBOT_ACT_MODEL set but empty — using in-repo act model"
             exit 0
           fi
-          # Model slugs only (letters, digits and . _ : / -). Anything else
-          # would produce a malformed config file, so fail loudly instead.
-          if [[ ! "$model" =~ ^[A-Za-z0-9._:/-]+$ ]]; then
+          # OpenRouter slugs: letters/digits plus . _ : / - @ + and the `~`
+          # "latest" alias prefix (e.g. ~deepseek/deepseek-flash-latest, the
+          # value this repo's org variable actually carries). Anything else is
+          # not a slug, so fail loudly instead of writing a config the action
+          # would choke on.
+          if [[ ! "$model" =~ ^[A-Za-z0-9._:/~@+-]+$ ]]; then
             echo "::error::DOTBOT_ACT_MODEL '$model' is not a valid OpenRouter model slug"
             exit 2
           fi
-          printf 'act:\n  model: %s\n' "$model" > "$RUNNER_TEMP/dotbot-act-model.yml"
+          # Single-quoted YAML scalar keeps unusual-but-legal slugs intact.
+          printf "act:\n  model: '%s'\n" "${model//\'/\'\'}" > "$RUNNER_TEMP/dotbot-act-model.yml"
           echo "config_path=$RUNNER_TEMP/dotbot-act-model.yml" >> "$GITHUB_OUTPUT"
           echo "Rendered act model config from DOTBOT_ACT_MODEL:"
           cat "$RUNNER_TEMP/dotbot-act-model.yml"

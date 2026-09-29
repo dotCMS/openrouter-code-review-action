@@ -804,13 +804,14 @@ def test_self_hosted_workflows_drive_models_from_org_repo_variables() -> None:
 
     assert "if: ${{ vars.DOTBOT_ACT_MODEL != '' }}" in act_workflow
     assert "ACT_MODEL: ${{ vars.DOTBOT_ACT_MODEL }}" in act_workflow
-    assert 'model="${model//[[:space:]]/}"' in act_workflow
     assert "$RUNNER_TEMP/dotbot-act-model.yml" in act_workflow
     assert "config_path=$RUNNER_TEMP/dotbot-act-model.yml" in act_workflow
     assert (
         "config_path: ${{ steps.act_model.outputs.config_path || '.openrouter-review.yml' }}"
         in act_workflow
     )
+    # The render step's behaviour (slug validation, YAML shape) is exercised
+    # end-to-end by tests/test_dotbot_workflow_model_vars.py.
 
 
 def test_edit_workflow_helpers_cover_reply_formatting_and_context_normalization() -> None:

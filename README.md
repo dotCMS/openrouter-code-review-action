@@ -171,7 +171,7 @@ config file:
 | Variable | Mode | Effect |
 |----------|------|--------|
 | `DOTBOT_REVIEW_MODELS` | review | Comma-separated roster. First entry becomes the primary `review.model`, the rest become `review.models` ("the fight"). Replaces the in-repo `review:` block for that run. |
-| `DOTBOT_ACT_MODEL` | act | Model slug for `/dotbot` edits. Replaces the in-repo `act:` block for that run. |
+| `DOTBOT_ACT_MODEL` | act | Model slug for `/dotbot` edits, including OpenRouter's `~` "latest" aliases (e.g. `~deepseek/deepseek-flash-latest`). Replaces the in-repo `act:` block for that run. |
 
 Both are optional. With a variable unset, nothing is generated and the in-repo
 `.openrouter-review.yml` (or the action default) applies. When set, the variable
