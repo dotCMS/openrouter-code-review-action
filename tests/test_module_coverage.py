@@ -910,17 +910,24 @@ def test_workflow_permissions_use_known_scopes() -> None:
     shorthands = {"read-all", "write-all"}
 
     offenders: list[str] = []
+
+    def _check(label: str, permissions: object) -> None:
+        """Record unknown scopes in one `permissions:` block (top-level or job)."""
+        if isinstance(permissions, str):
+            if permissions not in shorthands:
+                offenders.append(f"{label}:{permissions}")
+            return
+        if not isinstance(permissions, dict):
+            return
+        offenders.extend(f"{label}:{scope}" for scope in permissions if scope not in known_scopes)
+
     for path in sorted(Path(".github/workflows").glob("*.yml")):
         workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+        # Both levels can brick the workflow: a bad scope at the top of the file
+        # is as fatal as one inside a job.
+        _check(f"{path.name}:top-level", workflow.get("permissions"))
         for job_name, job in (workflow.get("jobs") or {}).items():
-            permissions = job.get("permissions")
-            if isinstance(permissions, str):
-                if permissions not in shorthands:
-                    offenders.append(f"{path.name}:{job_name}:{permissions}")
-                continue
-            for scope in permissions or {}:
-                if scope not in known_scopes:
-                    offenders.append(f"{path.name}:{job_name}:{scope}")
+            _check(f"{path.name}:{job_name}", job.get("permissions"))
 
     assert offenders == [], f"unknown permission scopes: {sorted(offenders)}"
 
