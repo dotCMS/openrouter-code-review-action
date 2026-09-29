@@ -789,11 +789,13 @@ def test_review_action_and_workflow_use_expected_resume_guard_and_model() -> Non
     # predates the github_approval_token input.
     assert "dotCMS/openrouter-code-review-action@" in review_workflow
     assert "dotCMS/openrouter-code-review-action@" in act_workflow
-    # Both workflows must pin the SAME released commit, and it must be a release
-    # that carries every input the workflows pass: a pin predating an input makes
-    # GitHub silently drop it (that is how github_approval_token was ignored and
-    # dotbot never approved a PR). Bump this constant with the pins on release.
-    expected_action_pin = "3f4cfa1356843d7ac3e764f331f88a883f5bf44b"
+    # Both workflows track the same moving `latest` tag instead of a frozen
+    # SHA. dotCMS owns this repo and cuts every release here (auto-release.yml),
+    # so the tag is as trusted as a SHA — and it can never lag an input the
+    # workflows pass. A pin predating an input makes GitHub silently drop it
+    # (that is how github_approval_token was ignored and dotbot never approved a
+    # PR), which is exactly why we float on `latest` rather than bump a SHA.
+    expected_action_pin = "latest"
     pins = {
         line.split("dotCMS/openrouter-code-review-action@", 1)[1].strip()
         for line in (review_workflow + act_workflow).splitlines()

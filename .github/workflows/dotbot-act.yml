@@ -101,10 +101,10 @@ jobs:
           echo "Rendered act model config from DOTBOT_ACT_MODEL:"
           cat "$RUNNER_TEMP/dotbot-act-model.yml"
       - name: dotbot autonomous edits
-        # Trusted main ref, NOT the PR-head checkout. This repo is the canonical
-        # home, so the pin points at itself (kept in lockstep with the review
-        # workflow). 3f4cfa1 = v1.3.1 / v1 / latest.
-        uses: dotCMS/openrouter-code-review-action@3f4cfa1356843d7ac3e764f331f88a883f5bf44b
+        # Trusted ref, NOT the PR-head checkout. This repo is the canonical home,
+        # so `latest` points at ourselves (kept in lockstep with the review
+        # workflow) — enforced by tests/test_module_coverage.py.
+        uses: dotCMS/openrouter-code-review-action@latest
         with:
           mode: act
           # DOTBOT_ACT_MODEL wins when set; otherwise the in-repo config file.

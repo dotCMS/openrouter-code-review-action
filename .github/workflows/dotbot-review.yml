@@ -78,24 +78,16 @@ jobs:
           } > .openrouter-review.yml
           echo "Rendered .openrouter-review.yml from DOTBOT_REVIEW_MODELS:"
           cat .openrouter-review.yml
-      # Always run the action's latest release via the @latest ref (2026-09-03,
-      # was pinned to SHA a716ed1 = v1.0.1-era). Pinning is the audit-friendly
-      # choice; we deliberately trade that for freshness here — the action only
-      # holds read creds + posts review comments, and stale pins caused the
-      # roster/attestation debugging on PR #860 to run against old code.
+      # Always run the action's latest release via the @latest ref. Pinning to a
+      # SHA is the more audit-friendly choice, but we own this repo and cut every
+      # release here (auto-release.yml), so the moving `latest` tag is equally
+      # trusted — and it can never lag an input the workflow passes (a stale pin
+      # silently drops inputs; that is how github_approval_token was ignored).
       - name: dotbot autonomous review
         id: dotbot
-        # Trusted ref, NOT the PR-head checkout. Update this SHA on each
-        # release (matches the v1/latest tag) — enforced by
-        # tests/test_module_coverage.py.
-        #
-        # This repo is the canonical home (releases are cut here by
-        # auto-release.yml), so the pin points at itself: the upstream
-        # wezell/openrouter-code-review-action has no release carrying the
-        # github_approval_token input, and the old wezell@d68edbb pin predated it,
-        # so GitHub silently dropped the input and auto-approval never fired.
-        # 3f4cfa1 = v1.3.1 / v1 / latest.
-        uses: dotCMS/openrouter-code-review-action@3f4cfa1356843d7ac3e764f331f88a883f5bf44b
+        # Trusted ref, NOT the PR-head checkout. `latest` tracks the newest
+        # release cut from this repo — enforced by tests/test_module_coverage.py.
+        uses: dotCMS/openrouter-code-review-action@latest
         with:
           mode: review
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
