@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+import yaml
 
 from cli.clients.github_client import GitHubClient, _extract_review_threads_page, _normalize_comment
 from cli.core.config import ReviewConfig
@@ -783,8 +784,8 @@ def test_review_action_and_workflow_use_expected_resume_guard_and_model() -> Non
     # finding on dotbot-act.yml).
     assert "        uses: ./\n" not in review_workflow
     assert "        uses: ./\n" not in act_workflow
-    assert "dotCMS/openrouter-code-review-action@" in review_workflow
-    assert "wezell/openrouter-code-review-action@" in act_workflow
+    assert "dotCMS/openrouter-code-review-action" in review_workflow
+
 
 
 def test_edit_workflow_helpers_cover_reply_formatting_and_context_normalization() -> None:

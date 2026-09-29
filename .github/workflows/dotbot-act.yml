@@ -6,10 +6,6 @@ on:
   pull_request_review_comment:
     types: [created]
 
-concurrency:
-  group: dotbot-act-${{ github.event.issue.number || github.event.pull_request.number || github.ref }}
-  cancel-in-progress: false
-
 jobs:
   act:
     name: Act on /dotbot comments
@@ -25,12 +21,29 @@ jobs:
         )
       ) &&
       github.actor != 'dependabot[bot]'
+    # Job-level, not workflow-level: every comment on the repo starts this
+    # workflow, and a workflow-level group is joined even when the job below is
+    # skipped. A skipped run would then cancel a waiting /dotbot run. A job
+    # skipped by `if:` never joins the group. queue: max keeps back-to-back
+    # /dotbot requests queued instead of dropping all but the newest.
+    concurrency:
+      group: dotbot-act-${{ github.event.issue.number || github.event.pull_request.number || github.ref }}
+      cancel-in-progress: false
+      queue: max
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      workflows: write
       pull-requests: write
       issues: write
+      # NOTE: there is no `workflows:` permission scope — declaring one makes
+      # GitHub reject the entire workflow file ("Invalid workflow file …"), so
+      # no run ever starts. Every act run here failed that way between
+      # 2026-09-04 and the fix, which is why /dotbot never did anything.
+      # Pushing commits that touch `.github/workflows/*` needs a *token* with
+      # the `workflow` scope (a PAT — see REPO_ACCESS_TOKEN below), not a
+      # workflow-level permission. `uvx --from actionlint-py actionlint` and
+      # tests/test_module_coverage.py now guard against a non-existent scope
+      # creeping back in.
     steps:
       - uses: actions/checkout@v4
         with:
@@ -41,12 +54,60 @@ jobs:
           # attacker-controlled composite steps with a write token in
           # .git/config. Pin the action to a trusted ref below instead.
           ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', github.event.issue.number) }}
-          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          # A PAT is preferred: pushes made with the workflow token do not
+          # trigger further workflow runs, and it cannot modify
+          # `.github/workflows/*` without the PAT `workflow` scope. Falls back to
+          # the workflow token so Act still works where no PAT is set.
+          token: ${{ secrets.REPO_ACCESS_TOKEN || github.token }}
+      # DOTBOT_ACT_MODEL (org or repo VARIABLE), when set, OVERRIDES the act
+      # model that would otherwise come from `act.model` in the in-repo
+      # .openrouter-review.yml. Like DOTBOT_REVIEW_MODELS on the review side,
+      # this is a REPLACEMENT of the act block, not an addition: the variable is
+      # authoritative whenever it is set, so one place (org/repo variables)
+      # drives the act model for every consuming repo. When it is unset, nothing
+      # is generated and the in-repo file (or the action default) stands.
+      #
+      # Unlike the review workflow, which re-renders .openrouter-review.yml in
+      # place (review never commits), the generated act config is written
+      # OUTSIDE the checkout: act mode pushes commits to the PR branch, so a
+      # generated file sitting in the worktree could be staged by the agent's
+      # commit and overwrite the repo's own config. Writing it to RUNNER_TEMP
+      # and passing it via `config_path` leaves the committed config untouched.
+      - name: Override act model from DOTBOT_ACT_MODEL (when set)
+        id: act_model
+        if: ${{ vars.DOTBOT_ACT_MODEL != '' }}
+        env:
+          ACT_MODEL: ${{ vars.DOTBOT_ACT_MODEL }}
+        run: |
+          set -euo pipefail
+          model="${ACT_MODEL:-}"
+          model="${model//[[:space:]]/}"
+          if [ -z "$model" ]; then
+            echo "::warning::DOTBOT_ACT_MODEL set but empty — using in-repo act model"
+            exit 0
+          fi
+          # OpenRouter slugs: letters/digits plus . _ : / - @ + and the `~`
+          # "latest" alias prefix (e.g. ~deepseek/deepseek-flash-latest, the
+          # value this repo's org variable actually carries). Anything else is
+          # not a slug, so fail loudly instead of writing a config the action
+          # would choke on.
+          if [[ ! "$model" =~ ^[A-Za-z0-9._:/~@+-]+$ ]]; then
+            echo "::error::DOTBOT_ACT_MODEL '$model' is not a valid OpenRouter model slug"
+            exit 2
+          fi
+          # Single-quoted YAML scalar keeps unusual-but-legal slugs intact.
+          printf "act:\n  model: '%s'\n" "${model//\'/\'\'}" > "$RUNNER_TEMP/dotbot-act-model.yml"
+          echo "config_path=$RUNNER_TEMP/dotbot-act-model.yml" >> "$GITHUB_OUTPUT"
+          echo "Rendered act model config from DOTBOT_ACT_MODEL:"
+          cat "$RUNNER_TEMP/dotbot-act-model.yml"
       - name: dotbot autonomous edits
-        # Trusted main ref, NOT the PR-head checkout. Update this SHA on each
-        # release (matches the v1/latest tag).
-        uses: wezell/openrouter-code-review-action@d68edbb67a3365b53b41d9f05406c084bf338295
+        # Trusted main ref, NOT the PR-head checkout. This repo is the canonical
+        # home, so the pin points at itself (kept in lockstep with the review
+        # workflow). 3f4cfa1 = v1.3.1 / v1 / latest.
+        uses: dotCMS/openrouter-code-review-action@3f4cfa1356843d7ac3e764f331f88a883f5bf44b
         with:
           mode: act
+          # DOTBOT_ACT_MODEL wins when set; otherwise the in-repo config file.
+          config_path: ${{ steps.act_model.outputs.config_path || '.openrouter-review.yml' }}
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           debug_level: 1

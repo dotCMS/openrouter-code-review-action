@@ -37,21 +37,34 @@ jobs:
           github_approval_token: ${{ secrets.DOTBOT_GITHUB_USER_PAT }}
 ```
 
+
 ### Automatic PR Approval
 
-If the `DOTBOT_GITHUB_USER_PAT` secret is set (passed via the
-`github_approval_token` input), the action approves the PR **as the PAT's
-user** — e.g. `dotCMS-Machine-User` — whenever *every* reviewer model in the
-roster concludes `Overall: patch is correct`. The approval is idempotent per
-head commit: re-running the workflow on the same SHA will not spam duplicate
-approvals.
+If a token is passed via the `github_approval_token` input — normally the
+`DOTBOT_GITHUB_USER_PAT` secret owned by a machine user such as
+`dotCMS-Machine-User` — the action approves the PR **as that user** whenever
+*every* reviewer model in the roster concludes `Overall: patch is correct`. The
+approval is idempotent per head commit: re-running the workflow on the same SHA
+will not spam duplicate approvals.
 
-If the secret is not set, or any reviewer model reports a finding, the action
+If the input is unset, or any reviewer model reports a finding, the action
 simply posts its review comments and skips the approval step. Approval
 submission failures are logged as warnings and never fail the review run.
 
 > The PAT needs `pull-requests: write` scope, and its user must differ from
 > the PR author (GitHub rejects approvals from the PR author).
+>
+> The self-hosted review workflow wires both:
+> `github_approval_token: ${{ secrets.DOTBOT_GITHUB_USER_PAT || github.token }}`
+> — the machine-user PAT when the secret exists, the workflow token otherwise,
+> so a consumer repo with no PAT still approves. Where no machine-user PAT is
+> available, `github_approval_token: ${{ github.token }}`
+> works too, provided the repo allows it (Settings → Actions → "Allow GitHub
+> Actions to create and approve pull requests"). Installation tokens cannot read
+> `GET /user`, so the action does not try to resolve an identity for them: the
+> approval is submitted as `github-actions[bot]` and idempotency falls back to a
+> marker in the review body. A bot cannot approve a PR the bot itself authored,
+> so a PAT remains the better choice where one exists.
 
 ## Act on `/dotbot` Comments
 
@@ -67,12 +80,8 @@ on:
   pull_request_review_comment: { types: [created] }
 permissions:
   contents: write
-  workflows: write       # needed if /dotbot may edit .github/workflows/*
   pull-requests: write
   issues: write
-concurrency:
-  group: dotbot-act-${{ github.event.issue.number || github.event.pull_request.number || github.ref }}
-  cancel-in-progress: false
 jobs:
   act:
     name: Act on /dotbot comments
@@ -88,6 +97,14 @@ jobs:
         )
       ) &&
       github.actor != 'dependabot[bot]'
+    # Job-level, not workflow-level: every comment starts this workflow, and a
+    # workflow-level group is joined even when the job is skipped, so an
+    # ordinary comment would cancel a waiting /dotbot run. queue: max keeps
+    # back-to-back /dotbot requests queued.
+    concurrency:
+      group: dotbot-act-${{ github.event.issue.number || github.event.pull_request.number || github.ref }}
+      cancel-in-progress: false
+      queue: max
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -162,6 +179,28 @@ Each reviewer runs the full pipeline in sequence:
 Review state (resume threads, SHA-delta scope, cache keys) is isolated per
 model, so changing the roster won't reuse the wrong review.
 
+### Org/Repo Variables (`vars.DOTBOT_*`)
+
+The self-hosted workflows read two GitHub **Variables** (org- or repo-level),
+so one place can pin the models for every consuming repo without editing its
+config file:
+
+| Variable | Mode | Effect |
+|----------|------|--------|
+| `DOTBOT_REVIEW_MODELS` | review | Comma-separated roster. First entry becomes the primary `review.model`, the rest become `review.models` ("the fight"). Replaces the in-repo `review:` block for that run. |
+| `DOTBOT_ACT_MODEL` | act | Model slug for `/dotbot` edits, including OpenRouter's `~` "latest" aliases (e.g. `~deepseek/deepseek-flash-latest`). Replaces the in-repo `act:` block for that run. |
+
+Both are optional. With a variable unset, nothing is generated and the in-repo
+`.openrouter-review.yml` (or the action default) applies. When set, the variable
+is authoritative — a variable set to a malformed slug fails the run instead of
+silently falling back.
+
+The act override is rendered to `$RUNNER_TEMP/dotbot-act-model.yml` and passed
+through the `config_path` input rather than written into the checkout: act mode
+pushes commits to the PR branch, so a generated file inside the worktree could
+otherwise be swept into the agent's commit. Review renders in place, since
+review never commits.
+
 Override the file path with the `config_path` action input or
 `OPENROUTER_REVIEW_CONFIG` env var (e.g. `ci/openrouter-models.yml`). Per-call
 action inputs (`model:`, `reasoning_effort:`) still win over the file when
@@ -184,7 +223,7 @@ call time; `cached` and `disabled` skip the live web fetch.
 | `model_timeout_seconds` | Wall-clock budget per reviewer model pass; 0 disables | `900` |
 | `web_search_mode` | `disabled` / `cached` / `live` | `live` |
 | **Review-only** | | |
-| `github_approval_token` | GitHub user PAT (e.g. `secrets.DOTBOT_GITHUB_USER_PAT`) owned by a machine user such as `dotCMS-Machine-User`. When every reviewer model reports `Overall: patch is correct`, dotbot approves the PR as that user; when unset (or any model dissents) reviews post as normal comments with no approval | *(unset)* |
+| `github_approval_token` | Token used to approve the PR when every reviewer model reports `Overall: patch is correct`. Normally a machine-user PAT (e.g. `secrets.DOTBOT_GITHUB_USER_PAT` for `dotCMS-Machine-User`); `${{ github.token }}` also works and approves as `github-actions[bot]`. When unset (or any model dissents) reviews post as normal comments with no approval | *(unset)* |
 | `additional_prompt` | Extra reviewer instructions (verbatim) | |
 | `resolve_stale_threads` | `0` or `1` — resolve prior unresolved dotbot threads the reviewer model saw but declined to carry forward (judged stale/fixed); threads never shown to the model stay open | `0` |
 | **Act-only** | | |
@@ -269,12 +308,14 @@ action-authored review threads** as context.
   on branches in the main repo, or use a PAT with fork access.
 - Grant only what's needed: `contents: write` (push), `pull-requests: write`
   (reviews), `issues: write` (summary comments and Act replies).
-- **`workflows: write` is required for Act mode** when the `/dotbot` fix touches
-  `.github/workflows/*`. The default `GITHUB_TOKEN` refuses to push edits to
-  workflow files without it — you'll see `refusing to allow a GitHub App to
-  create or update workflow ... without workflows permission`. Add
-  `workflows: write` to the Act job's `permissions:` block if you want `/dotbot`
-  to be able to modify workflows.
+- **Editing `.github/workflows/*` needs a PAT, not a permission.** There is no
+  `workflows:` scope for `GITHUB_TOKEN` — declaring one makes GitHub reject the
+  entire workflow file, so no run ever starts. The `GITHUB_TOKEN` used to push
+  cannot create or update workflow files either; to let `/dotbot` edit them, set
+  `secrets.REPO_ACCESS_TOKEN` to a PAT carrying the `workflow` scope (the
+  workflow already prefers it over `github.token`). Otherwise you'll see
+  `refusing to allow a GitHub App to create or update workflow … without
+  workflows permission`.
 
 ## Troubleshooting
 
