@@ -84,10 +84,10 @@ jobs:
           echo "Rendered act model config from DOTBOT_ACT_MODEL:"
           cat "$RUNNER_TEMP/dotbot-act-model.yml"
       - name: dotbot autonomous edits
-        # Trusted main ref, NOT the PR-head checkout. Update this SHA on each
-        # release (matches the v1/latest tag; kept in lockstep with the review
-        # workflow).
-        uses: wezell/openrouter-code-review-action@bbe2345626d658ba630921faa6be8166cd421bda
+        # Trusted main ref, NOT the PR-head checkout. This repo is the canonical
+        # home, so the pin points at itself (kept in lockstep with the review
+        # workflow). bbe2345 = v1.2.0 / v1 / latest.
+        uses: dotCMS/openrouter-code-review-action@bbe2345626d658ba630921faa6be8166cd421bda
         with:
           mode: act
           # DOTBOT_ACT_MODEL wins when set; otherwise the in-repo config file.

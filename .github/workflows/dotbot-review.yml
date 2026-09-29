@@ -88,11 +88,13 @@ jobs:
         # release (matches the v1/latest tag) — enforced by
         # tests/test_module_coverage.py.
         #
-        # bbe2345 = v1.2.0 / v1 / latest. The previous pin (d68edbb, the
-        # split-review-act era) predated the github_approval_token input, so
-        # GitHub silently dropped it ("Unexpected input(s)") and auto-approval
-        # never fired.
-        uses: wezell/openrouter-code-review-action@bbe2345626d658ba630921faa6be8166cd421bda
+        # This repo is the canonical home (releases are cut here by
+        # auto-release.yml), so the pin points at itself: the upstream
+        # wezell/openrouter-code-review-action has no release carrying the
+        # github_approval_token input, and the old wezell@d68edbb pin predated it,
+        # so GitHub silently dropped the input and auto-approval never fired.
+        # bbe2345 = v1.2.0 / v1 / latest.
+        uses: dotCMS/openrouter-code-review-action@bbe2345626d658ba630921faa6be8166cd421bda
         with:
           mode: review
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
