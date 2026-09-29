@@ -1042,13 +1042,14 @@ class ReviewWorkflow:
         roster: tuple[str, ...],
         head_sha: str,
     ) -> None:
-        """Approve the PR as the machine user when every reviewer agrees it is correct.
+        """Approve the PR as the approving token's user when reviewers agree it is correct.
 
-        Requires ``github_approval_token`` (a PAT owned by the machine user,
-        e.g. dotCMS-Machine-User). Only fires when *every* model in the
-        roster reported ``Overall: patch is correct`` — a single dissent
-        (or any active finding) withholds the approval. Failures to submit
-        are logged as warnings; they never fail the review run itself.
+        Requires ``github_approval_token`` — a machine-user PAT, or
+        ``${{ github.token }}`` for a github-actions[bot] approval. Only fires
+        when *every* model in the roster reported ``Overall: patch is
+        correct`` — a single dissent (or any active finding) withholds the
+        approval. Failures to submit are logged as warnings; they never fail
+        the review run itself.
         """
         unanimous = bool(results) and all(
             result.summary.overall_correctness.strip().casefold()
@@ -1092,11 +1093,11 @@ class ReviewWorkflow:
             print(f"Warning: failed to submit PR approval: {exc}", file=sys.stderr)
             return
         if outcome.submitted:
-            print(
-                f"Approved PR #{pr.number} as {outcome.login}: all reviewers agree the patch is correct"
-            )
+            approver = f" as {outcome.login}" if outcome.login else ""
+            print(f"Approved PR #{pr.number}{approver}: all reviewers agree the patch is correct")
         elif outcome.reason == "already_approved":
-            print(f"PR #{pr.number} already approved by {outcome.login} for {head_sha}")
+            approver = f" by {outcome.login}" if outcome.login else ""
+            print(f"PR #{pr.number} already approved{approver} for {head_sha}")
 
     def _refresh_context_artifacts(
         self,

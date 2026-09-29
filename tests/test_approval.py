@@ -6,7 +6,13 @@ from typing import Any
 import pytest
 
 from cli.core.exceptions import GitHubAPIError
-from cli.review.approval import ApprovalOutcome, build_approval_body, submit_pr_approval
+from cli.review.approval import (
+    APPROVAL_BODY_TEMPLATE,
+    APPROVAL_MARKER,
+    ApprovalOutcome,
+    build_approval_body,
+    submit_pr_approval,
+)
 
 
 def _debug_spy() -> tuple[list[tuple[int, str]], Any]:
@@ -33,10 +39,18 @@ class _FakeRequester:
 
 
 class _FakeReview:
-    def __init__(self, *, login: str, state: str, commit_id: str) -> None:
-        self.user = SimpleNamespace(login=login)
+    def __init__(
+        self,
+        *,
+        login: str | None,
+        state: str,
+        commit_id: str,
+        body: str | None = None,
+    ) -> None:
+        self.user = SimpleNamespace(login=login) if login is not None else None
         self.state = state
         self.commit_id = commit_id
+        self.body = body
 
 
 class _FakeApprovalPR:
@@ -179,15 +193,15 @@ def test_submit_pr_approval_submits_when_prior_approval_is_for_older_sha(
     assert len(pr._requester.requests) == 1
 
 
-def test_submit_pr_approval_wraps_api_failure(monkeypatch: pytest.MonkeyPatch) -> None:
-    class _BrokenGithub(_FakeGithub):
-        def get_user(self) -> _FakeApprovalUser:
+def test_submit_pr_approval_wraps_pr_load_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _NoPRGithub(_FakeGithub):
+        def get_repo(self, repository: str) -> _FakeApprovalRepo:
             raise RuntimeError("boom")
 
-    _patch_github(monkeypatch, _BrokenGithub())
+    _patch_github(monkeypatch, _NoPRGithub())
     _, debug = _debug_spy()
 
-    with pytest.raises(GitHubAPIError, match="boom"):
+    with pytest.raises(GitHubAPIError, match="failed to load owner/repo#7 for approval: boom"):
         submit_pr_approval(
             repository="owner/repo",
             pr_number=7,
@@ -198,8 +212,114 @@ def test_submit_pr_approval_wraps_api_failure(monkeypatch: pytest.MonkeyPatch) -
         )
 
 
+def test_submit_pr_approval_tolerates_token_that_cannot_read_its_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Installation tokens (${{ github.token }}) get 403 from GET /user.
+
+    The approval must still be submitted: the identity is unknowable by design
+    for the workflow token, not a configuration error.
+    """
+
+    class _InstallationTokenGithub(_FakeGithub):
+        def get_user(self) -> _FakeApprovalUser:
+            raise RuntimeError("Resource not accessible by integration: 403")
+
+    pr = _FakeApprovalPR(reviews=[])
+    gh = _InstallationTokenGithub(repo=_FakeApprovalRepo(pr))
+    _patch_github(monkeypatch, gh)
+    debug_messages, debug = _debug_spy()
+
+    outcome = submit_pr_approval(
+        repository="owner/repo",
+        pr_number=7,
+        head_sha="abc123",
+        token="ghs_installation_token",
+        body="LGTM",
+        debug=debug,
+    )
+
+    assert outcome == ApprovalOutcome(submitted=True, login="")
+    assert len(pr._requester.requests) == 1
+    assert any("installation token" in message for _, message in debug_messages)
+
+
+def test_submit_pr_approval_dedupes_by_body_marker_when_login_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without a login, our own marker in an approval body keeps re-runs idempotent."""
+
+    class _InstallationTokenGithub(_FakeGithub):
+        def get_user(self) -> _FakeApprovalUser:
+            raise RuntimeError("Resource not accessible by integration: 403")
+
+    pr = _FakeApprovalPR(
+        reviews=[
+            _FakeReview(
+                login="github-actions[bot]",
+                state="APPROVED",
+                commit_id="abc123",
+                body=APPROVAL_BODY_TEMPLATE.format(models="openai/gpt-5"),
+            )
+        ]
+    )
+    gh = _InstallationTokenGithub(repo=_FakeApprovalRepo(pr))
+    _patch_github(monkeypatch, gh)
+    _, debug = _debug_spy()
+
+    outcome = submit_pr_approval(
+        repository="owner/repo",
+        pr_number=7,
+        head_sha="abc123",
+        token="ghs_installation_token",
+        body="LGTM",
+        debug=debug,
+    )
+
+    assert outcome == ApprovalOutcome(submitted=False, login="", reason="already_approved")
+    assert pr._requester.requests == []
+
+
+def test_submit_pr_approval_ignores_unmarked_approval_when_login_unknown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Another actor's approval must not suppress ours when we can't match logins."""
+
+    class _InstallationTokenGithub(_FakeGithub):
+        def get_user(self) -> _FakeApprovalUser:
+            raise RuntimeError("Resource not accessible by integration: 403")
+
+    pr = _FakeApprovalPR(
+        reviews=[
+            _FakeReview(
+                login="some-human",
+                state="APPROVED",
+                commit_id="abc123",
+                body="looks good to me",
+            )
+        ]
+    )
+    gh = _InstallationTokenGithub(repo=_FakeApprovalRepo(pr))
+    _patch_github(monkeypatch, gh)
+    _, debug = _debug_spy()
+
+    outcome = submit_pr_approval(
+        repository="owner/repo",
+        pr_number=7,
+        head_sha="abc123",
+        token="ghs_installation_token",
+        body="LGTM",
+        debug=debug,
+    )
+
+    assert outcome.submitted is True
+    assert len(pr._requester.requests) == 1
+
+
 def test_build_approval_body_lists_models() -> None:
     body = build_approval_body(["openai/gpt-5", "google/gemini-2.5-pro"])
     assert "patch is correct" in body
     assert "openai/gpt-5" in body
     assert "google/gemini-2.5-pro" in body
+    # The body marker is the idempotency key for tokens whose login is unknown.
+    assert APPROVAL_MARKER in body

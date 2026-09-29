@@ -39,14 +39,14 @@ jobs:
 
 ### Automatic PR Approval
 
-If the `DOTBOT_GITHUB_USER_PAT` secret is set (passed via the
-`github_approval_token` input), the action approves the PR **as the PAT's
-user** — e.g. `dotCMS-Machine-User` — whenever *every* reviewer model in the
-roster concludes `Overall: patch is correct`. The approval is idempotent per
-head commit: re-running the workflow on the same SHA will not spam duplicate
-approvals.
+If a token is passed via the `github_approval_token` input — normally the
+`DOTBOT_GITHUB_USER_PAT` secret owned by a machine user such as
+`dotCMS-Machine-User` — the action approves the PR **as that user** whenever
+*every* reviewer model in the roster concludes `Overall: patch is correct`. The
+approval is idempotent per head commit: re-running the workflow on the same SHA
+will not spam duplicate approvals.
 
-If the secret is not set, or any reviewer model reports a finding, the action
+If the input is unset, or any reviewer model reports a finding, the action
 simply posts its review comments and skips the approval step. Approval
 submission failures are logged as warnings and never fail the review run.
 
@@ -55,9 +55,11 @@ submission failures are logged as warnings and never fail the review run.
 >
 > Where no machine-user PAT is available, `github_approval_token: ${{ github.token }}`
 > works too, provided the repo allows it (Settings → Actions → "Allow GitHub
-> Actions to create and approve pull requests"). The approval is then attributed
-> to `github-actions[bot]` instead of a named user, and the bot cannot approve a
-> PR that the bot itself authored.
+> Actions to create and approve pull requests"). Installation tokens cannot read
+> `GET /user`, so the action does not try to resolve an identity for them: the
+> approval is submitted as `github-actions[bot]` and idempotency falls back to a
+> marker in the review body. A bot cannot approve a PR the bot itself authored,
+> so a PAT remains the better choice where one exists.
 
 ## Act on `/dotbot` Comments
 
@@ -212,7 +214,7 @@ call time; `cached` and `disabled` skip the live web fetch.
 | `model_timeout_seconds` | Wall-clock budget per reviewer model pass; 0 disables | `900` |
 | `web_search_mode` | `disabled` / `cached` / `live` | `live` |
 | **Review-only** | | |
-| `github_approval_token` | GitHub user PAT (e.g. `secrets.DOTBOT_GITHUB_USER_PAT`) owned by a machine user such as `dotCMS-Machine-User`. When every reviewer model reports `Overall: patch is correct`, dotbot approves the PR as that user; when unset (or any model dissents) reviews post as normal comments with no approval | *(unset)* |
+| `github_approval_token` | Token used to approve the PR when every reviewer model reports `Overall: patch is correct`. Normally a machine-user PAT (e.g. `secrets.DOTBOT_GITHUB_USER_PAT` for `dotCMS-Machine-User`); `${{ github.token }}` also works and approves as `github-actions[bot]`. When unset (or any model dissents) reviews post as normal comments with no approval | *(unset)* |
 | `additional_prompt` | Extra reviewer instructions (verbatim) | |
 | `resolve_stale_threads` | `0` or `1` — resolve prior unresolved dotbot threads the reviewer model saw but declined to carry forward (judged stale/fixed); threads never shown to the model stay open | `0` |
 | **Act-only** | | |

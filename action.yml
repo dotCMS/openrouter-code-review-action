@@ -18,10 +18,13 @@ inputs:
     required: false
   github_approval_token:
     description: >-
-      GitHub user PAT owned by the machine user (e.g. dotCMS-Machine-User).
-      When every reviewer model reports "Overall: patch is correct", dotbot
-      approves the PR as that user. Leave empty (secret DOTBOT_GITHUB_USER_PAT
-      unset) to disable auto-approval and just post review comments normally.
+      Token used to submit the approval review when every reviewer model reports
+      "Overall: patch is correct". Usually a GitHub user PAT owned by a machine
+      user (e.g. dotCMS-Machine-User, secret DOTBOT_GITHUB_USER_PAT) so the
+      approval is attributed to a named user; `${{ github.token }}` also works,
+      in which case the approval shows as github-actions[bot] (the repo must
+      allow Actions to approve pull requests). Leave empty to disable
+      auto-approval and just post review comments normally.
     required: false
     default: ""
   config_path:
