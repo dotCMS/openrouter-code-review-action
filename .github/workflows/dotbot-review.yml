@@ -92,6 +92,15 @@ jobs:
           mode: review
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           model: deepseek/deepseek-v4-pro-0813
+          # Auto-approval when every reviewer reports "patch is correct". This
+          # repo has no DOTBOT_GITHUB_USER_PAT machine-user PAT (see the note
+          # above), so the workflow token is used: the approval lands as
+          # github-actions[bot], which the repo permits
+          # (Settings → Actions → "Allow GitHub Actions to create and approve
+          # pull requests"). A PAT is still the better choice where one exists
+          # — it attributes the approval to a named user, and a bot cannot
+          # approve a PR the bot itself authored.
+          github_approval_token: ${{ github.token }}
           reasoning_effort: medium
           web_search_mode: cached
           debug_level: 1

@@ -785,6 +785,9 @@ def test_review_action_and_workflow_use_expected_resume_guard_and_model() -> Non
     assert "        uses: ./\n" not in act_workflow
     assert "wezell/openrouter-code-review-action@" in review_workflow
     assert "wezell/openrouter-code-review-action@" in act_workflow
+    # Auto-approval when every reviewer agrees: this repo has no machine-user
+    # PAT, so the workflow token is passed explicitly.
+    assert "github_approval_token: ${{ github.token }}" in review_workflow
 
 
 def test_self_hosted_workflows_drive_models_from_org_repo_variables() -> None:

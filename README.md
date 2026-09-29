@@ -52,6 +52,12 @@ submission failures are logged as warnings and never fail the review run.
 
 > The PAT needs `pull-requests: write` scope, and its user must differ from
 > the PR author (GitHub rejects approvals from the PR author).
+>
+> Where no machine-user PAT is available, `github_approval_token: ${{ github.token }}`
+> works too, provided the repo allows it (Settings → Actions → "Allow GitHub
+> Actions to create and approve pull requests"). The approval is then attributed
+> to `github-actions[bot]` instead of a named user, and the bot cannot approve a
+> PR that the bot itself authored.
 
 ## Act on `/dotbot` Comments
 
