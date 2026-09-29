@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+import yaml
 
 from cli.clients.github_client import GitHubClient, _extract_review_threads_page, _normalize_comment
 from cli.core.config import ReviewConfig
@@ -829,6 +830,32 @@ def test_self_hosted_workflows_drive_models_from_org_repo_variables() -> None:
     )
     # The render step's behaviour (slug validation, YAML shape) is exercised
     # end-to-end by tests/test_dotbot_workflow_model_vars.py.
+
+
+def test_action_cli_steps_cannot_be_shadowed_by_the_checkout() -> None:
+    """The pinned action's code must run, not the caller's `cli/` package.
+
+    Composite steps execute in the caller's workspace and `python -m` puts the
+    current directory ahead of PYTHONPATH, so a checkout that ships a `cli/`
+    package would run *its* code instead of the pinned action's — with the
+    workflow's token. PYTHONSAFEPATH on every CLI-invoking step prevents it.
+    """
+
+    action_yaml = yaml.safe_load(Path("action.yml").read_text(encoding="utf-8"))
+    cli_steps = [
+        step
+        for step in action_yaml["runs"]["steps"]
+        if "cli.main" in str(step.get("run", ""))
+        or "cli.review.prepare_resume_state" in str(step.get("run", ""))
+    ]
+
+    assert cli_steps, "expected at least one step invoking the CLI"
+    for step in cli_steps:
+        assert step["env"].get("PYTHONSAFEPATH") == "1", (
+            f"step {step.get('name')!r} can be shadowed by the checkout"
+        )
+        run = str(step["run"])
+        assert "github.action_path" in run or "GITHUB_ACTION_PATH" in run
 
 
 def test_edit_workflow_helpers_cover_reply_formatting_and_context_normalization() -> None:
