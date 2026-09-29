@@ -162,6 +162,28 @@ Each reviewer runs the full pipeline in sequence:
 Review state (resume threads, SHA-delta scope, cache keys) is isolated per
 model, so changing the roster won't reuse the wrong review.
 
+### Org/Repo Variables (`vars.DOTBOT_*`)
+
+The self-hosted workflows read two GitHub **Variables** (org- or repo-level),
+so one place can pin the models for every consuming repo without editing its
+config file:
+
+| Variable | Mode | Effect |
+|----------|------|--------|
+| `DOTBOT_REVIEW_MODELS` | review | Comma-separated roster. First entry becomes the primary `review.model`, the rest become `review.models` ("the fight"). Replaces the in-repo `review:` block for that run. |
+| `DOTBOT_ACT_MODEL` | act | Model slug for `/dotbot` edits. Replaces the in-repo `act:` block for that run. |
+
+Both are optional. With a variable unset, nothing is generated and the in-repo
+`.openrouter-review.yml` (or the action default) applies. When set, the variable
+is authoritative — a variable set to a malformed slug fails the run instead of
+silently falling back.
+
+The act override is rendered to `$RUNNER_TEMP/dotbot-act-model.yml` and passed
+through the `config_path` input rather than written into the checkout: act mode
+pushes commits to the PR branch, so a generated file inside the worktree could
+otherwise be swept into the agent's commit. Review renders in place, since
+review never commits.
+
 Override the file path with the `config_path` action input or
 `OPENROUTER_REVIEW_CONFIG` env var (e.g. `ci/openrouter-models.yml`). Per-call
 action inputs (`model:`, `reasoning_effort:`) still win over the file when

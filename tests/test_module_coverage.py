@@ -787,6 +787,32 @@ def test_review_action_and_workflow_use_expected_resume_guard_and_model() -> Non
     assert "wezell/openrouter-code-review-action@" in act_workflow
 
 
+def test_self_hosted_workflows_drive_models_from_org_repo_variables() -> None:
+    """Review/act models come from the DOTBOT_* org/repo variables.
+
+    DOTBOT_REVIEW_MODELS is rendered into .openrouter-review.yml for the run
+    (first entry = primary reviewer). DOTBOT_ACT_MODEL is rendered to a file in
+    RUNNER_TEMP and passed via `config_path` — never written into the checkout,
+    because act mode commits to the PR branch.
+    """
+
+    review_workflow = Path(".github/workflows/dotbot-review.yml").read_text(encoding="utf-8")
+    act_workflow = Path(".github/workflows/dotbot-act.yml").read_text(encoding="utf-8")
+
+    assert "if: ${{ vars.DOTBOT_REVIEW_MODELS != '' }}" in review_workflow
+    assert "REVIEW_MODELS: ${{ vars.DOTBOT_REVIEW_MODELS }}" in review_workflow
+
+    assert "if: ${{ vars.DOTBOT_ACT_MODEL != '' }}" in act_workflow
+    assert "ACT_MODEL: ${{ vars.DOTBOT_ACT_MODEL }}" in act_workflow
+    assert 'model="${model//[[:space:]]/}"' in act_workflow
+    assert "$RUNNER_TEMP/dotbot-act-model.yml" in act_workflow
+    assert "config_path=$RUNNER_TEMP/dotbot-act-model.yml" in act_workflow
+    assert (
+        "config_path: ${{ steps.act_model.outputs.config_path || '.openrouter-review.yml' }}"
+        in act_workflow
+    )
+
+
 def test_edit_workflow_helpers_cover_reply_formatting_and_context_normalization() -> None:
     truncated = _format_edit_reply("x" * 3605, pushed=False, dry_run=False, changed=True)
     assert "not pushed" in truncated
