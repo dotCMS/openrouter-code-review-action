@@ -93,8 +93,8 @@ jobs:
         # wezell/openrouter-code-review-action has no release carrying the
         # github_approval_token input, and the old wezell@d68edbb pin predated it,
         # so GitHub silently dropped the input and auto-approval never fired.
-        # bbe2345 = v1.2.0 / v1 / latest.
-        uses: dotCMS/openrouter-code-review-action@bbe2345626d658ba630921faa6be8166cd421bda
+        # 3f4cfa1 = v1.3.1 / v1 / latest.
+        uses: dotCMS/openrouter-code-review-action@3f4cfa1356843d7ac3e764f331f88a883f5bf44b
         with:
           mode: review
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
