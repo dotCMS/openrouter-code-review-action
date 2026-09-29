@@ -37,6 +37,7 @@ jobs:
           github_approval_token: ${{ secrets.DOTBOT_GITHUB_USER_PAT }}
 ```
 
+
 ### Automatic PR Approval
 
 If the `DOTBOT_GITHUB_USER_PAT` secret is set (passed via the
