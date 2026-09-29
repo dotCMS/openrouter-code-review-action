@@ -793,7 +793,7 @@ def test_review_action_and_workflow_use_expected_resume_guard_and_model() -> Non
     # that carries every input the workflows pass: a pin predating an input makes
     # GitHub silently drop it (that is how github_approval_token was ignored and
     # dotbot never approved a PR). Bump this constant with the pins on release.
-    expected_action_pin = "bbe2345626d658ba630921faa6be8166cd421bda"
+    expected_action_pin = "3f4cfa1356843d7ac3e764f331f88a883f5bf44b"
     pins = {
         line.split("dotCMS/openrouter-code-review-action@", 1)[1].strip()
         for line in (review_workflow + act_workflow).splitlines()
