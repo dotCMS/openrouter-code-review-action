@@ -53,7 +53,11 @@ submission failures are logged as warnings and never fail the review run.
 > The PAT needs `pull-requests: write` scope, and its user must differ from
 > the PR author (GitHub rejects approvals from the PR author).
 >
-> Where no machine-user PAT is available, `github_approval_token: ${{ github.token }}`
+> The self-hosted review workflow wires both:
+> `github_approval_token: ${{ secrets.DOTBOT_GITHUB_USER_PAT || github.token }}`
+> — the machine-user PAT when the secret exists, the workflow token otherwise,
+> so a consumer repo with no PAT still approves. Where no machine-user PAT is
+> available, `github_approval_token: ${{ github.token }}`
 > works too, provided the repo allows it (Settings → Actions → "Allow GitHub
 > Actions to create and approve pull requests"). Installation tokens cannot read
 > `GET /user`, so the action does not try to resolve an identity for them: the

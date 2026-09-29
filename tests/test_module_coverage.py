@@ -800,9 +800,12 @@ def test_review_action_and_workflow_use_expected_resume_guard_and_model() -> Non
         if "dotCMS/openrouter-code-review-action@" in line
     }
     assert pins == {expected_action_pin}, f"unexpected action pins: {sorted(pins)}"
-    # Auto-approval when every reviewer agrees: this repo has no machine-user
-    # PAT, so the workflow token is passed explicitly.
-    assert "github_approval_token: ${{ github.token }}" in review_workflow
+    # Auto-approval when every reviewer agrees: prefer the machine-user PAT,
+    # fall back to the workflow token so a repo without the secret still approves.
+    assert (
+        "github_approval_token: ${{ secrets.DOTBOT_GITHUB_USER_PAT || github.token }}"
+        in review_workflow
+    )
 
 
 def test_self_hosted_workflows_drive_models_from_org_repo_variables() -> None:
