@@ -21,10 +21,13 @@ inputs:
       Token used to submit the approval review when every reviewer model reports
       "Overall: patch is correct". Usually a GitHub user PAT owned by a machine
       user (e.g. dotCMS-Machine-User, secret DOTBOT_GITHUB_USER_PAT) so the
-      approval is attributed to a named user; `${{ github.token }}` also works,
-      in which case the approval shows as github-actions[bot] (the repo must
-      allow Actions to approve pull requests). Leave empty to disable
-      auto-approval and just post review comments normally.
+      approval is attributed to a named user. The workflow token works too (pass
+      it from the calling workflow) — the approval then shows as
+      github-actions[bot], and the repo must allow Actions to approve pull
+      requests. Leave empty to disable auto-approval and just post review
+      comments normally. Note: no expression may appear in this description; an
+      input description is evaluated without the github context, and using one
+      there makes GitHub reject the whole action.yml.
     required: false
     default: ""
   config_path:
