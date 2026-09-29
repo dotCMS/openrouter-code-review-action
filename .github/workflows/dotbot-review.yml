@@ -28,8 +28,9 @@ jobs:
         with:
           fetch-depth: 0
       # NOTE: ovh-k8s-cluster uses secrets.DOTBOT_GITHUB_USER_PAT (a machine-user
-      # PAT) for these statuses; this repo has no such secret, so the workflow
-      # token (statuses: write) is used instead.
+      # PAT) for these statuses; this repo now has that secret too, but the
+      # workflow token still posts the statuses (statuses: write below), which
+      # keeps them independent of the approval PAT.
 # "Being reviewed by dotBot" is a commit status on the head SHA, not a
       # PR comment: statuses never send notification emails, and the PR's
       # checks area shows the in-progress state live. (A run cancelled by
@@ -99,15 +100,14 @@ jobs:
           mode: review
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           model: deepseek/deepseek-v4-pro-0813
-          # Auto-approval when every reviewer reports "patch is correct". This
-          # repo has no DOTBOT_GITHUB_USER_PAT machine-user PAT (see the note
-          # above), so the workflow token is used: the approval lands as
-          # github-actions[bot], which the repo permits
-          # (Settings → Actions → "Allow GitHub Actions to create and approve
-          # pull requests"). A PAT is still the better choice where one exists
-          # — it attributes the approval to a named user, and a bot cannot
-          # approve a PR the bot itself authored.
-          github_approval_token: ${{ github.token }}
+          # Auto-approval when every reviewer reports "patch is correct".
+          # DOTBOT_GITHUB_USER_PAT (the machine user, dotCMS-Machine-User) is
+          # preferred: the approval is a named-user approval, and the token's
+          # user must differ from the PR author or GitHub rejects it. Falls back
+          # to the workflow token so a repo without the secret still approves —
+          # that lands as github-actions[bot] (allowed here: Settings → Actions →
+          # "Allow GitHub Actions to create and approve pull requests").
+          github_approval_token: ${{ secrets.DOTBOT_GITHUB_USER_PAT || github.token }}
           reasoning_effort: medium
           web_search_mode: cached
           debug_level: 1
