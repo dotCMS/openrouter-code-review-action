@@ -880,6 +880,58 @@ def test_action_input_descriptions_contain_no_expressions() -> None:
     assert offenders == {}, f"expressions in input descriptions: {sorted(offenders)}"
 
 
+def test_workflow_permissions_use_known_scopes() -> None:
+    """An unknown permission scope makes GitHub reject the whole workflow file.
+
+    `workflows: write` in dotbot-act.yml did exactly that — every run was a
+    "workflow file issue" (28 of them, silent to everyone) and /dotbot never
+    executed. The scope lists are GitHub's; keep the guard in sync if GitHub
+    adds one (actionlint in CI reports the same thing).
+    """
+
+    known_scopes = {
+        "actions",
+        "artifact-metadata",
+        "attestations",
+        "checks",
+        "contents",
+        "deployments",
+        "discussions",
+        "id-token",
+        "issues",
+        "models",
+        "packages",
+        "pages",
+        "pull-requests",
+        "repository-projects",
+        "security-events",
+        "statuses",
+    }
+    shorthands = {"read-all", "write-all"}
+
+    offenders: list[str] = []
+
+    def _check(label: str, permissions: object) -> None:
+        """Record unknown scopes in one `permissions:` block (top-level or job)."""
+        if isinstance(permissions, str):
+            if permissions not in shorthands:
+                offenders.append(f"{label}:{permissions}")
+            return
+        if not isinstance(permissions, dict):
+            return
+        offenders.extend(f"{label}:{scope}" for scope in permissions if scope not in known_scopes)
+
+    for path in sorted(Path(".github/workflows").glob("*.yml")):
+        workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+        # Both levels can brick the workflow: a bad scope at the top of the file
+        # is as fatal as one inside a job.
+        _check(f"{path.name}:top-level", workflow.get("permissions"))
+        for job_name, job in (workflow.get("jobs") or {}).items():
+            _check(f"{path.name}:{job_name}", job.get("permissions"))
+
+    assert offenders == [], f"unknown permission scopes: {sorted(offenders)}"
+
+
 def test_edit_workflow_helpers_cover_reply_formatting_and_context_normalization() -> None:
     truncated = _format_edit_reply("x" * 3605, pushed=False, dry_run=False, changed=True)
     assert "not pushed" in truncated

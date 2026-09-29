@@ -28,9 +28,17 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      workflows: write
       pull-requests: write
       issues: write
+      # NOTE: there is no `workflows:` permission scope — declaring one makes
+      # GitHub reject the entire workflow file ("Invalid workflow file …"), so
+      # no run ever starts. Every act run here failed that way between
+      # 2026-09-04 and the fix, which is why /dotbot never did anything.
+      # Pushing commits that touch `.github/workflows/*` needs a *token* with
+      # the `workflow` scope (a PAT — see REPO_ACCESS_TOKEN below), not a
+      # workflow-level permission. `uvx --from actionlint-py actionlint` and
+      # tests/test_module_coverage.py now guard against a non-existent scope
+      # creeping back in.
     steps:
       - uses: actions/checkout@v4
         with:
@@ -41,7 +49,11 @@ jobs:
           # attacker-controlled composite steps with a write token in
           # .git/config. Pin the action to a trusted ref below instead.
           ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', github.event.issue.number) }}
-          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          # A PAT is preferred: pushes made with the workflow token do not
+          # trigger further workflow runs, and it cannot modify
+          # `.github/workflows/*` without the PAT `workflow` scope. Falls back to
+          # the workflow token so Act still works where no PAT is set.
+          token: ${{ secrets.REPO_ACCESS_TOKEN || github.token }}
       # DOTBOT_ACT_MODEL (org or repo VARIABLE), when set, OVERRIDES the act
       # model that would otherwise come from `act.model` in the in-repo
       # .openrouter-review.yml. Like DOTBOT_REVIEW_MODELS on the review side,

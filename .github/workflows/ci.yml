@@ -29,6 +29,12 @@ jobs:
       - name: Pre-commit (ruff format/check, mypy)
         run: uv run pre-commit run --all-files
 
+      # Catches invalid workflow files (e.g. a non-existent permission scope),
+      # which GitHub rejects wholesale — the run then never starts and the only
+      # trace is a failed "workflow file issue" run.
+      - name: Lint workflows (actionlint)
+        run: uvx --from actionlint-py==1.7.12.25 actionlint
+
       - name: Run tests
         run: uv run pytest -q
 
