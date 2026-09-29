@@ -858,6 +858,28 @@ def test_action_cli_steps_cannot_be_shadowed_by_the_checkout() -> None:
         assert "github.action_path" in run or "GITHUB_ACTION_PATH" in run
 
 
+def test_action_input_descriptions_contain_no_expressions() -> None:
+    """A `${{ … }}` in an input description bricks the action.
+
+    Input descriptions are evaluated without the `github`/`inputs` contexts, so
+    `github.token` in one makes GitHub refuse to load action.yml at all:
+
+      ##[error]action.yml (Line: 20, Col: 18): Unrecognized named-value:
+      'github'. Located at position 1 within expression: github.token
+
+    Expressions are only valid under `runs:`.
+    """
+
+    action_yaml = yaml.safe_load(Path("action.yml").read_text(encoding="utf-8"))
+    offenders = {
+        name: cfg.get("description", "")
+        for name, cfg in action_yaml["inputs"].items()
+        if "${{" in str(cfg.get("description", ""))
+    }
+
+    assert offenders == {}, f"expressions in input descriptions: {sorted(offenders)}"
+
+
 def test_edit_workflow_helpers_cover_reply_formatting_and_context_normalization() -> None:
     truncated = _format_edit_reply("x" * 3605, pushed=False, dry_run=False, changed=True)
     assert "not pushed" in truncated
