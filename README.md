@@ -75,7 +75,6 @@ on:
   pull_request_review_comment: { types: [created] }
 permissions:
   contents: write
-  workflows: write       # needed if /dotbot may edit .github/workflows/*
   pull-requests: write
   issues: write
 concurrency:
@@ -299,12 +298,14 @@ action-authored review threads** as context.
   on branches in the main repo, or use a PAT with fork access.
 - Grant only what's needed: `contents: write` (push), `pull-requests: write`
   (reviews), `issues: write` (summary comments and Act replies).
-- **`workflows: write` is required for Act mode** when the `/dotbot` fix touches
-  `.github/workflows/*`. The default `GITHUB_TOKEN` refuses to push edits to
-  workflow files without it — you'll see `refusing to allow a GitHub App to
-  create or update workflow ... without workflows permission`. Add
-  `workflows: write` to the Act job's `permissions:` block if you want `/dotbot`
-  to be able to modify workflows.
+- **Editing `.github/workflows/*` needs a PAT, not a permission.** There is no
+  `workflows:` scope for `GITHUB_TOKEN` — declaring one makes GitHub reject the
+  entire workflow file, so no run ever starts. The `GITHUB_TOKEN` used to push
+  cannot create or update workflow files either; to let `/dotbot` edit them, set
+  `secrets.REPO_ACCESS_TOKEN` to a PAT carrying the `workflow` scope (the
+  workflow already prefers it over `github.token`). Otherwise you'll see
+  `refusing to allow a GitHub App to create or update workflow … without
+  workflows permission`.
 
 ## Troubleshooting
 
