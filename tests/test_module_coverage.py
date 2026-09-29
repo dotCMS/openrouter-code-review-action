@@ -784,8 +784,157 @@ def test_review_action_and_workflow_use_expected_resume_guard_and_model() -> Non
     # finding on dotbot-act.yml).
     assert "        uses: ./\n" not in review_workflow
     assert "        uses: ./\n" not in act_workflow
-    assert "dotCMS/openrouter-code-review-action" in review_workflow
+    # This repo is the canonical home for the action, so the trusted pin points
+    # at itself — not at the upstream wezell/ mirror, whose newest release
+    # predates the github_approval_token input.
+    assert "dotCMS/openrouter-code-review-action@" in review_workflow
+    assert "dotCMS/openrouter-code-review-action@" in act_workflow
+    # Both workflows track the same moving `latest` tag instead of a frozen
+    # SHA. dotCMS owns this repo and cuts every release here (auto-release.yml),
+    # so the tag is as trusted as a SHA — and it can never lag an input the
+    # workflows pass. A pin predating an input makes GitHub silently drop it
+    # (that is how github_approval_token was ignored and dotbot never approved a
+    # PR), which is exactly why we float on `latest` rather than bump a SHA.
+    expected_action_pin = "latest"
+    pins = {
+        line.split("dotCMS/openrouter-code-review-action@", 1)[1].strip()
+        for line in (review_workflow + act_workflow).splitlines()
+        if "dotCMS/openrouter-code-review-action@" in line
+    }
+    assert pins == {expected_action_pin}, f"unexpected action pins: {sorted(pins)}"
+    # Auto-approval when every reviewer agrees: prefer the machine-user PAT,
+    # fall back to the workflow token so a repo without the secret still approves.
+    assert (
+        "github_approval_token: ${{ secrets.DOTBOT_GITHUB_USER_PAT || github.token }}"
+        in review_workflow
+    )
 
+
+def test_self_hosted_workflows_drive_models_from_org_repo_variables() -> None:
+    """Review/act models come from the DOTBOT_* org/repo variables.
+
+    DOTBOT_REVIEW_MODELS is rendered into .openrouter-review.yml for the run
+    (first entry = primary reviewer). DOTBOT_ACT_MODEL is rendered to a file in
+    RUNNER_TEMP and passed via `config_path` — never written into the checkout,
+    because act mode commits to the PR branch.
+    """
+
+    review_workflow = Path(".github/workflows/dotbot-review.yml").read_text(encoding="utf-8")
+    act_workflow = Path(".github/workflows/dotbot-act.yml").read_text(encoding="utf-8")
+
+    assert "if: ${{ vars.DOTBOT_REVIEW_MODELS != '' }}" in review_workflow
+    assert "REVIEW_MODELS: ${{ vars.DOTBOT_REVIEW_MODELS }}" in review_workflow
+
+    assert "if: ${{ vars.DOTBOT_ACT_MODEL != '' }}" in act_workflow
+    assert "ACT_MODEL: ${{ vars.DOTBOT_ACT_MODEL }}" in act_workflow
+    assert "$RUNNER_TEMP/dotbot-act-model.yml" in act_workflow
+    assert "config_path=$RUNNER_TEMP/dotbot-act-model.yml" in act_workflow
+    assert (
+        "config_path: ${{ steps.act_model.outputs.config_path || '.openrouter-review.yml' }}"
+        in act_workflow
+    )
+    # The render step's behaviour (slug validation, YAML shape) is exercised
+    # end-to-end by tests/test_dotbot_workflow_model_vars.py.
+
+
+def test_action_cli_steps_cannot_be_shadowed_by_the_checkout() -> None:
+    """The pinned action's code must run, not the caller's `cli/` package.
+
+    Composite steps execute in the caller's workspace and `python -m` puts the
+    current directory ahead of PYTHONPATH, so a checkout that ships a `cli/`
+    package would run *its* code instead of the pinned action's — with the
+    workflow's token. PYTHONSAFEPATH on every CLI-invoking step prevents it.
+    """
+
+    action_yaml = yaml.safe_load(Path("action.yml").read_text(encoding="utf-8"))
+    cli_steps = [
+        step
+        for step in action_yaml["runs"]["steps"]
+        if "cli.main" in str(step.get("run", ""))
+        or "cli.review.prepare_resume_state" in str(step.get("run", ""))
+    ]
+
+    assert cli_steps, "expected at least one step invoking the CLI"
+    for step in cli_steps:
+        assert step["env"].get("PYTHONSAFEPATH") == "1", (
+            f"step {step.get('name')!r} can be shadowed by the checkout"
+        )
+        run = str(step["run"])
+        assert "github.action_path" in run or "GITHUB_ACTION_PATH" in run
+
+
+def test_action_input_descriptions_contain_no_expressions() -> None:
+    """A `${{ … }}` in an input description bricks the action.
+
+    Input descriptions are evaluated without the `github`/`inputs` contexts, so
+    `github.token` in one makes GitHub refuse to load action.yml at all:
+
+      ##[error]action.yml (Line: 20, Col: 18): Unrecognized named-value:
+      'github'. Located at position 1 within expression: github.token
+
+    Expressions are only valid under `runs:`.
+    """
+
+    action_yaml = yaml.safe_load(Path("action.yml").read_text(encoding="utf-8"))
+    offenders = {
+        name: cfg.get("description", "")
+        for name, cfg in action_yaml["inputs"].items()
+        if "${{" in str(cfg.get("description", ""))
+    }
+
+    assert offenders == {}, f"expressions in input descriptions: {sorted(offenders)}"
+
+
+def test_workflow_permissions_use_known_scopes() -> None:
+    """An unknown permission scope makes GitHub reject the whole workflow file.
+
+    `workflows: write` in dotbot-act.yml did exactly that — every run was a
+    "workflow file issue" (28 of them, silent to everyone) and /dotbot never
+    executed. The scope lists are GitHub's; keep the guard in sync if GitHub
+    adds one (actionlint in CI reports the same thing).
+    """
+
+    known_scopes = {
+        "actions",
+        "artifact-metadata",
+        "attestations",
+        "checks",
+        "contents",
+        "deployments",
+        "discussions",
+        "id-token",
+        "issues",
+        "models",
+        "packages",
+        "pages",
+        "pull-requests",
+        "repository-projects",
+        "security-events",
+        "statuses",
+    }
+    shorthands = {"read-all", "write-all"}
+
+    offenders: list[str] = []
+
+    def _check(label: str, permissions: object) -> None:
+        """Record unknown scopes in one `permissions:` block (top-level or job)."""
+        if isinstance(permissions, str):
+            if permissions not in shorthands:
+                offenders.append(f"{label}:{permissions}")
+            return
+        if not isinstance(permissions, dict):
+            return
+        offenders.extend(f"{label}:{scope}" for scope in permissions if scope not in known_scopes)
+
+    for path in sorted(Path(".github/workflows").glob("*.yml")):
+        workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+        # Both levels can brick the workflow: a bad scope at the top of the file
+        # is as fatal as one inside a job.
+        _check(f"{path.name}:top-level", workflow.get("permissions"))
+        for job_name, job in (workflow.get("jobs") or {}).items():
+            _check(f"{path.name}:{job_name}", job.get("permissions"))
+
+    assert offenders == [], f"unknown permission scopes: {sorted(offenders)}"
 
 
 def test_edit_workflow_helpers_cover_reply_formatting_and_context_normalization() -> None:

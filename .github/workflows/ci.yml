@@ -32,8 +32,16 @@ jobs:
       # Catches invalid workflow files (e.g. a non-existent permission scope),
       # which GitHub rejects wholesale — the run then never starts and the only
       # trace is a failed "workflow file issue" run.
+      #
+      # actionlint 1.7.12 predates the concurrency `queue` key. GitHub accepts
+      # it (SchemaStore knows it), so dotbot-act.yml legitimately uses
+      # `queue: max` to let back-to-back /dotbot runs queue instead of
+      # cancelling each other. Ignore just that diagnostic until actionlint
+      # ships the schema — everything else stays enforced.
       - name: Lint workflows (actionlint)
-        run: uvx --from actionlint-py==1.7.12.25 actionlint
+        run: |
+          uvx --from actionlint-py==1.7.12.25 actionlint \
+            -ignore 'unexpected key "queue" for "concurrency" section'
 
       - name: Run tests
         run: uv run pytest -q
