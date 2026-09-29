@@ -1169,7 +1169,7 @@ class ReviewWorkflow:
 
         schema_prompt = self._build_schema_prompt(snapshots.prior_dotbot_comments)
 
-        print(f"Running dotbot ({model}) to generate review findings...", flush=True)
+        print(f"Running dotbot ({model}) to generate review findings [SHADOW-PROBE]...", flush=True)
 
         effective_model = (
             self.config.model_name if self.config.model_provider == "openai" else model
