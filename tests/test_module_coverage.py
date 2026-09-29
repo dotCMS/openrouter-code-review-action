@@ -785,6 +785,17 @@ def test_review_action_and_workflow_use_expected_resume_guard_and_model() -> Non
     assert "        uses: ./\n" not in act_workflow
     assert "wezell/openrouter-code-review-action@" in review_workflow
     assert "wezell/openrouter-code-review-action@" in act_workflow
+    # Both workflows must pin the SAME released commit, and it must be a release
+    # that carries every input the workflows pass: a pin predating an input makes
+    # GitHub silently drop it (that is how github_approval_token was ignored and
+    # dotbot never approved a PR). Bump this constant with the pins on release.
+    expected_action_pin = "bbe2345626d658ba630921faa6be8166cd421bda"
+    pins = {
+        line.split("wezell/openrouter-code-review-action@", 1)[1].strip()
+        for line in (review_workflow + act_workflow).splitlines()
+        if "wezell/openrouter-code-review-action@" in line
+    }
+    assert pins == {expected_action_pin}, f"unexpected action pins: {sorted(pins)}"
     # Auto-approval when every reviewer agrees: this repo has no machine-user
     # PAT, so the workflow token is passed explicitly.
     assert "github_approval_token: ${{ github.token }}" in review_workflow

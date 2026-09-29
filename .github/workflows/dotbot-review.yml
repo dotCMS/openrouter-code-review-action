@@ -87,7 +87,12 @@ jobs:
         # Trusted ref, NOT the PR-head checkout. Update this SHA on each
         # release (matches the v1/latest tag) — enforced by
         # tests/test_module_coverage.py.
-        uses: wezell/openrouter-code-review-action@d68edbb67a3365b53b41d9f05406c084bf338295
+        #
+        # bbe2345 = v1.2.0 / v1 / latest. The previous pin (d68edbb, the
+        # split-review-act era) predated the github_approval_token input, so
+        # GitHub silently dropped it ("Unexpected input(s)") and auto-approval
+        # never fired.
+        uses: wezell/openrouter-code-review-action@bbe2345626d658ba630921faa6be8166cd421bda
         with:
           mode: review
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
