@@ -18,10 +18,13 @@ inputs:
     required: false
   github_approval_token:
     description: >-
-      GitHub user PAT owned by the machine user (e.g. dotCMS-Machine-User).
-      When every reviewer model reports "Overall: patch is correct", dotbot
-      approves the PR as that user. Leave empty (secret DOTBOT_GITHUB_USER_PAT
-      unset) to disable auto-approval and just post review comments normally.
+      Token used to submit the approval review when every reviewer model reports
+      "Overall: patch is correct". Usually a GitHub user PAT owned by a machine
+      user (e.g. dotCMS-Machine-User, secret DOTBOT_GITHUB_USER_PAT) so the
+      approval is attributed to a named user; `${{ github.token }}` also works,
+      in which case the approval shows as github-actions[bot] (the repo must
+      allow Actions to approve pull requests). Leave empty to disable
+      auto-approval and just post review comments normally.
     required: false
     default: ""
   config_path:
@@ -124,6 +127,11 @@ runs:
         DOTBOT_MODEL_INPUT: ${{ inputs.model }}
         OPENROUTER_REVIEW_CONFIG: ${{ inputs.config_path }}
         GITHUB_ACTION_PATH: ${{ github.action_path }}
+        # Composite steps run in the *caller's* workspace, and `python -m`
+        # puts the current directory ahead of PYTHONPATH on sys.path — so a
+        # checkout containing a `cli/` package would execute that code
+        # instead of this pinned action. PYTHONSAFEPATH stops the injection.
+        PYTHONSAFEPATH: "1"
       run: |
         set -euo pipefail
         PYTHONPATH="${GITHUB_ACTION_PATH}:${PYTHONPATH:-}" \
@@ -180,6 +188,12 @@ runs:
         # deltas reach the GitHub Actions live log as soon as the
         # OpenRouter SSE stream emits them.
         PYTHONUNBUFFERED: "1"
+        # See the note on the resume-state step: without this, a checkout
+        # containing its own `cli/` package shadows the pinned action's code
+        # (`python -m` prefers the cwd). For act mode that means running
+        # PR-head code with a write token — the exact escalation the trusted
+        # ref pin exists to prevent.
+        PYTHONSAFEPATH: "1"
         # Conversation threads for the OpenRouter agent loop live here so
         # the cache steps can persist them across runs for resume.
         OPENROUTER_THREAD_DIR: ${{ runner.temp }}/openrouter-review-threads

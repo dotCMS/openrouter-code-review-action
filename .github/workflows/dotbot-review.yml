@@ -87,11 +87,27 @@ jobs:
         # Trusted ref, NOT the PR-head checkout. Update this SHA on each
         # release (matches the v1/latest tag) — enforced by
         # tests/test_module_coverage.py.
-        uses: wezell/openrouter-code-review-action@d68edbb67a3365b53b41d9f05406c084bf338295
+        #
+        # This repo is the canonical home (releases are cut here by
+        # auto-release.yml), so the pin points at itself: the upstream
+        # wezell/openrouter-code-review-action has no release carrying the
+        # github_approval_token input, and the old wezell@d68edbb pin predated it,
+        # so GitHub silently dropped the input and auto-approval never fired.
+        # bbe2345 = v1.2.0 / v1 / latest.
+        uses: dotCMS/openrouter-code-review-action@bbe2345626d658ba630921faa6be8166cd421bda
         with:
           mode: review
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           model: deepseek/deepseek-v4-pro-0813
+          # Auto-approval when every reviewer reports "patch is correct". This
+          # repo has no DOTBOT_GITHUB_USER_PAT machine-user PAT (see the note
+          # above), so the workflow token is used: the approval lands as
+          # github-actions[bot], which the repo permits
+          # (Settings → Actions → "Allow GitHub Actions to create and approve
+          # pull requests"). A PAT is still the better choice where one exists
+          # — it attributes the approval to a named user, and a bot cannot
+          # approve a PR the bot itself authored.
+          github_approval_token: ${{ github.token }}
           reasoning_effort: medium
           web_search_mode: cached
           debug_level: 1

@@ -306,3 +306,50 @@ def test_review_models_rejects_empty_list(base_env: Path) -> None:
 
     with pytest.raises(ConfigurationError, match="non-empty list"):
         ReviewConfig.from_args(pr_number=1, mode="review")
+
+
+# --- DOTBOT_ACT_MODEL: generated act config outside the checkout -------------
+
+
+def test_act_model_from_generated_config_outside_repo(
+    base_env: Path,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mirror the dotbot-act workflow's DOTBOT_ACT_MODEL override.
+
+    The workflow renders ``act:\n  model: <slug>\n`` to a file in RUNNER_TEMP
+    (outside GITHUB_WORKSPACE) and passes it as the ``config_path`` action
+    input, which the action forwards as ``OPENROUTER_REVIEW_CONFIG``. The
+    variable must win over the repo's committed ``act.model``, and the
+    generated file must be usable from outside the checkout.
+    """
+
+    _write_config(base_env, "act:\n  model: anthropic/claude-opus-4.7\n")
+
+    runner_temp = tmp_path_factory.mktemp("runner-temp")
+    generated = runner_temp / "dotbot-act-model.yml"
+    generated.write_text("act:\n  model: openai/gpt-5.4\n", encoding="utf-8")
+    monkeypatch.setenv("OPENROUTER_REVIEW_CONFIG", str(generated))
+
+    config = ReviewConfig.from_args(pr_number=1, mode="act")
+
+    assert config.act_model == "openai/gpt-5.4"
+    assert config.selected_model == "openai/gpt-5.4"
+    # Act-only file: review fields fall back to defaults. Act runs never read
+    # them, and the absolute out-of-checkout path must not break loading.
+    assert config.review_model == DEFAULT_REVIEW_MODEL
+
+
+def test_act_model_generated_config_without_review_block_is_valid(
+    tmp_path: Path,
+) -> None:
+    """The generated act-only file is a complete, valid config on its own."""
+
+    generated = tmp_path / "dotbot-act-model.yml"
+    generated.write_text("act:\n  model: google/gemini-2.5-pro\n", encoding="utf-8")
+
+    cfg = load_model_config(config_path=str(generated))
+
+    assert cfg.act_model == "google/gemini-2.5-pro"
+    assert cfg.review_model == DEFAULT_REVIEW_MODEL

@@ -42,11 +42,55 @@ jobs:
           # .git/config. Pin the action to a trusted ref below instead.
           ref: ${{ github.event.pull_request.head.sha || format('refs/pull/{0}/head', github.event.issue.number) }}
           token: ${{ secrets.REPO_ACCESS_TOKEN }}
+      # DOTBOT_ACT_MODEL (org or repo VARIABLE), when set, OVERRIDES the act
+      # model that would otherwise come from `act.model` in the in-repo
+      # .openrouter-review.yml. Like DOTBOT_REVIEW_MODELS on the review side,
+      # this is a REPLACEMENT of the act block, not an addition: the variable is
+      # authoritative whenever it is set, so one place (org/repo variables)
+      # drives the act model for every consuming repo. When it is unset, nothing
+      # is generated and the in-repo file (or the action default) stands.
+      #
+      # Unlike the review workflow, which re-renders .openrouter-review.yml in
+      # place (review never commits), the generated act config is written
+      # OUTSIDE the checkout: act mode pushes commits to the PR branch, so a
+      # generated file sitting in the worktree could be staged by the agent's
+      # commit and overwrite the repo's own config. Writing it to RUNNER_TEMP
+      # and passing it via `config_path` leaves the committed config untouched.
+      - name: Override act model from DOTBOT_ACT_MODEL (when set)
+        id: act_model
+        if: ${{ vars.DOTBOT_ACT_MODEL != '' }}
+        env:
+          ACT_MODEL: ${{ vars.DOTBOT_ACT_MODEL }}
+        run: |
+          set -euo pipefail
+          model="${ACT_MODEL:-}"
+          model="${model//[[:space:]]/}"
+          if [ -z "$model" ]; then
+            echo "::warning::DOTBOT_ACT_MODEL set but empty — using in-repo act model"
+            exit 0
+          fi
+          # OpenRouter slugs: letters/digits plus . _ : / - @ + and the `~`
+          # "latest" alias prefix (e.g. ~deepseek/deepseek-flash-latest, the
+          # value this repo's org variable actually carries). Anything else is
+          # not a slug, so fail loudly instead of writing a config the action
+          # would choke on.
+          if [[ ! "$model" =~ ^[A-Za-z0-9._:/~@+-]+$ ]]; then
+            echo "::error::DOTBOT_ACT_MODEL '$model' is not a valid OpenRouter model slug"
+            exit 2
+          fi
+          # Single-quoted YAML scalar keeps unusual-but-legal slugs intact.
+          printf "act:\n  model: '%s'\n" "${model//\'/\'\'}" > "$RUNNER_TEMP/dotbot-act-model.yml"
+          echo "config_path=$RUNNER_TEMP/dotbot-act-model.yml" >> "$GITHUB_OUTPUT"
+          echo "Rendered act model config from DOTBOT_ACT_MODEL:"
+          cat "$RUNNER_TEMP/dotbot-act-model.yml"
       - name: dotbot autonomous edits
-        # Trusted main ref, NOT the PR-head checkout. Update this SHA on each
-        # release (matches the v1/latest tag).
-        uses: wezell/openrouter-code-review-action@d68edbb67a3365b53b41d9f05406c084bf338295
+        # Trusted main ref, NOT the PR-head checkout. This repo is the canonical
+        # home, so the pin points at itself (kept in lockstep with the review
+        # workflow). bbe2345 = v1.2.0 / v1 / latest.
+        uses: dotCMS/openrouter-code-review-action@bbe2345626d658ba630921faa6be8166cd421bda
         with:
           mode: act
+          # DOTBOT_ACT_MODEL wins when set; otherwise the in-repo config file.
+          config_path: ${{ steps.act_model.outputs.config_path || '.openrouter-review.yml' }}
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           debug_level: 1

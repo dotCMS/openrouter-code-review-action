@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+import yaml
 
 from cli.clients.github_client import GitHubClient, _extract_review_threads_page, _normalize_comment
 from cli.core.config import ReviewConfig
@@ -783,8 +784,78 @@ def test_review_action_and_workflow_use_expected_resume_guard_and_model() -> Non
     # finding on dotbot-act.yml).
     assert "        uses: ./\n" not in review_workflow
     assert "        uses: ./\n" not in act_workflow
-    assert "wezell/openrouter-code-review-action@" in review_workflow
-    assert "wezell/openrouter-code-review-action@" in act_workflow
+    # This repo is the canonical home for the action, so the trusted pin points
+    # at itself — not at the upstream wezell/ mirror, whose newest release
+    # predates the github_approval_token input.
+    assert "dotCMS/openrouter-code-review-action@" in review_workflow
+    assert "dotCMS/openrouter-code-review-action@" in act_workflow
+    # Both workflows must pin the SAME released commit, and it must be a release
+    # that carries every input the workflows pass: a pin predating an input makes
+    # GitHub silently drop it (that is how github_approval_token was ignored and
+    # dotbot never approved a PR). Bump this constant with the pins on release.
+    expected_action_pin = "bbe2345626d658ba630921faa6be8166cd421bda"
+    pins = {
+        line.split("dotCMS/openrouter-code-review-action@", 1)[1].strip()
+        for line in (review_workflow + act_workflow).splitlines()
+        if "dotCMS/openrouter-code-review-action@" in line
+    }
+    assert pins == {expected_action_pin}, f"unexpected action pins: {sorted(pins)}"
+    # Auto-approval when every reviewer agrees: this repo has no machine-user
+    # PAT, so the workflow token is passed explicitly.
+    assert "github_approval_token: ${{ github.token }}" in review_workflow
+
+
+def test_self_hosted_workflows_drive_models_from_org_repo_variables() -> None:
+    """Review/act models come from the DOTBOT_* org/repo variables.
+
+    DOTBOT_REVIEW_MODELS is rendered into .openrouter-review.yml for the run
+    (first entry = primary reviewer). DOTBOT_ACT_MODEL is rendered to a file in
+    RUNNER_TEMP and passed via `config_path` — never written into the checkout,
+    because act mode commits to the PR branch.
+    """
+
+    review_workflow = Path(".github/workflows/dotbot-review.yml").read_text(encoding="utf-8")
+    act_workflow = Path(".github/workflows/dotbot-act.yml").read_text(encoding="utf-8")
+
+    assert "if: ${{ vars.DOTBOT_REVIEW_MODELS != '' }}" in review_workflow
+    assert "REVIEW_MODELS: ${{ vars.DOTBOT_REVIEW_MODELS }}" in review_workflow
+
+    assert "if: ${{ vars.DOTBOT_ACT_MODEL != '' }}" in act_workflow
+    assert "ACT_MODEL: ${{ vars.DOTBOT_ACT_MODEL }}" in act_workflow
+    assert "$RUNNER_TEMP/dotbot-act-model.yml" in act_workflow
+    assert "config_path=$RUNNER_TEMP/dotbot-act-model.yml" in act_workflow
+    assert (
+        "config_path: ${{ steps.act_model.outputs.config_path || '.openrouter-review.yml' }}"
+        in act_workflow
+    )
+    # The render step's behaviour (slug validation, YAML shape) is exercised
+    # end-to-end by tests/test_dotbot_workflow_model_vars.py.
+
+
+def test_action_cli_steps_cannot_be_shadowed_by_the_checkout() -> None:
+    """The pinned action's code must run, not the caller's `cli/` package.
+
+    Composite steps execute in the caller's workspace and `python -m` puts the
+    current directory ahead of PYTHONPATH, so a checkout that ships a `cli/`
+    package would run *its* code instead of the pinned action's — with the
+    workflow's token. PYTHONSAFEPATH on every CLI-invoking step prevents it.
+    """
+
+    action_yaml = yaml.safe_load(Path("action.yml").read_text(encoding="utf-8"))
+    cli_steps = [
+        step
+        for step in action_yaml["runs"]["steps"]
+        if "cli.main" in str(step.get("run", ""))
+        or "cli.review.prepare_resume_state" in str(step.get("run", ""))
+    ]
+
+    assert cli_steps, "expected at least one step invoking the CLI"
+    for step in cli_steps:
+        assert step["env"].get("PYTHONSAFEPATH") == "1", (
+            f"step {step.get('name')!r} can be shadowed by the checkout"
+        )
+        run = str(step["run"])
+        assert "github.action_path" in run or "GITHUB_ACTION_PATH" in run
 
 
 def test_edit_workflow_helpers_cover_reply_formatting_and_context_normalization() -> None:
