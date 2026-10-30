@@ -95,7 +95,7 @@ jobs:
       # Update this pin explicitly when adopting a newer reviewed action version.
       - name: dotbot autonomous review
         id: dotbot
-        uses: dotCMS/openrouter-code-review-action@12f20534acf7c2c8df20f563ce3807e7140b4c1e
+        uses: dotCMS/openrouter-code-review-action@9f5e3e6fdaf180609f8c2045f40e8eb8fbd824e5
         with:
           mode: review
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
