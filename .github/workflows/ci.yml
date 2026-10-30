@@ -9,6 +9,25 @@ permissions:
   contents: read
 
 jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Scan repository with Trivy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: 'v0.74.0'
+          scan-type: fs
+          scan-ref: '.'
+          scanners: vuln,misconfig,secret
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          skip-dirs: .venv
+
   lint-type-test:
     runs-on: ubuntu-latest
     steps:

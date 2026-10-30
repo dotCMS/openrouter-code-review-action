@@ -18,8 +18,8 @@ inputs:
     required: false
   github_approval_token:
     description: >-
-      Token used to submit the approval review when every reviewer model reports
-      "Overall: patch is correct". Usually a GitHub user PAT owned by a machine
+      Token used to submit the approval review when the final configured
+      decision policy accepts the patch (unanimous by default). Usually a GitHub user PAT owned by a machine
       user (e.g. dotCMS-Machine-User, secret DOTBOT_GITHUB_USER_PAT) so the
       approval is attributed to a named user. The workflow token works too (pass
       it from the calling workflow) — the approval then shows as
@@ -42,7 +42,7 @@ inputs:
     required: false
     default: "gpt-5.4"
   review_models:
-    description: "Comma-separated extra review models to run alongside the primary reviewer (multi-model rosters)"
+    description: "Comma-separated extra OpenRouter review models for concurrent investigation and shared discussion before one final review"
     required: false
     default: ""
   reasoning_effort:
@@ -69,7 +69,7 @@ inputs:
     required: false
     default: "0"
   stream_agent_messages:
-    description: "If '1', stream model output to logs"
+    description: "If '1', stream model output, or attributed panel discussion messages, to logs"
     required: false
     default: "1"
   act_instructions:

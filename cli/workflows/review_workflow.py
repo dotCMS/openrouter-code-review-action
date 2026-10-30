@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,7 +19,9 @@ from ..clients.git_ops import (
 )
 from ..clients.github_client import GitHubClient, GitHubClientProtocol
 from ..clients.model_client import ModelClientProtocol, create_model_client
+from ..clients.openrouter_client import OpenRouterClient
 from ..clients.openrouter_thread_store import OpenRouterThreadStore
+from ..clients.openrouter_tools import execute_tool
 from ..core.config import ReviewConfig, make_debug
 from ..core.exceptions import DotBotExecutionError, ReviewContractError, ReviewResumeError
 from ..core.github_types import (
@@ -39,6 +42,7 @@ from ..review.anchor_engine import build_anchor_maps
 from ..review.approval import build_approval_body, submit_pr_approval
 from ..review.artifacts import ReviewArtifacts
 from ..review.context_manager import ReviewContextWriter
+from ..review.coordinator import ReviewCoordinator
 from ..review.dedupe import (
     SUMMARY_MARKER,
     collect_dotbot_author_logins,
@@ -271,9 +275,11 @@ class ReviewWorkflow:
         *,
         github_client: GitHubClientProtocol | None = None,
         model_client: ModelClientProtocol | None = None,
+        model_client_factory: Callable[[ReviewConfig], ModelClientProtocol] | None = None,
     ) -> None:
         self.config = config
         self.model_client = model_client or create_model_client(config)
+        self._model_client_factory = model_client_factory
         self.context_manager = ReviewContextWriter()
         self.github_client: GitHubClientProtocol = github_client or GitHubClient(config)
         self._debug = make_debug(config)
@@ -707,6 +713,7 @@ class ReviewWorkflow:
         pr: PullRequestLikeProtocol,
         *,
         repo_root: Path,
+        source_reader: Callable[[str], str | None] | None = None,
     ) -> _ReviewSnapshots:
         try:
             review_comments_snapshot = list(pr.get_review_comments())
@@ -734,6 +741,7 @@ class ReviewWorkflow:
                 review_threads_snapshot,
                 dotbot_author_logins,
                 repo_root,
+                source_reader=source_reader,
             )
             self._debug(
                 1,
@@ -926,13 +934,9 @@ class ReviewWorkflow:
     def process_review(self, pr_number: int) -> ReviewWorkflowResult:
         """Process a code review for the given pull request.
 
-        When a multi-model roster is configured (``review.models`` or
-        ``DOTBOT_REVIEW_MODELS``), each model runs the full pipeline in
-        sequence and posts its own findings and summary. Review state
-        (resume threads, SHA-delta, cache keys) is isolated per model via
-        ``config.review_model``, and snapshots are refreshed between models
-        so a later model sees the earlier models' posted inline comments as
-        prior dotbot context — that is the disagreement/refutation pass.
+        OpenRouter multi-model rosters deliberate concurrently and publish
+        one final decision. Single-model and legacy-provider paths retain
+        their existing resume and publication behavior.
         """
         self._debug(1, f"Processing review for {self.config.repository} PR #{pr_number}")
 
@@ -948,6 +952,9 @@ class ReviewWorkflow:
 
         roster = self.config.selected_review_models
         self._debug(1, f"Reviewer roster: {len(roster)} model(s) -> {', '.join(roster)}")
+
+        if self.config.model_provider == "openrouter" and len(roster) > 1:
+            return self._process_panel(pr, changed_files, rename_map, head_sha, artifacts)
 
         results: list[ReviewWorkflowResult] = []
         initial_prior_comments: list[PriorDotBotReviewComment] = []
@@ -976,6 +983,124 @@ class ReviewWorkflow:
         )
         self._maybe_approve_pr(pr, results=results, roster=roster, head_sha=head_sha)
         return results[-1]
+
+    def _panel_diff(self, pr: PullRequestLikeProtocol, head_sha: str) -> str:
+        if pr.base is None:
+            raise ReviewContractError("Panel review requires the PR base commit")
+        for sha in (pr.base.sha, head_sha):
+            if not re.fullmatch(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})", sha):
+                raise ReviewContractError("Panel review requires exact base/head commit SHAs")
+        result = subprocess.run(
+            [
+                "git",
+                "--no-pager",
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
+                f"{pr.base.sha}...{head_sha}",
+                "--",
+            ],
+            cwd=self.config.resolved_repo_root,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=120,
+        )
+        return result.stdout
+
+    def _assert_panel_head(self, pr_number: int, head_sha: str) -> None:
+        current = self.github_client.get_pr(pr_number)
+        if self._require_head_sha(current) != head_sha:
+            raise ReviewContractError(
+                "PR head changed during panel review; rerun before publication/approval"
+            )
+
+    def _process_panel(
+        self,
+        pr: PullRequestLikeProtocol,
+        changed_files: list[ChangedFileProtocol],
+        rename_map: dict[str, str],
+        head_sha: str,
+        artifacts: ReviewArtifacts,
+    ) -> ReviewWorkflowResult:
+        source_cache: dict[str, str | None] = {}
+
+        def read_source(path: str) -> str | None:
+            if path not in source_cache:
+                content = execute_tool(
+                    "read_file",
+                    json.dumps({"path": path}),
+                    repo_root=self.config.resolved_repo_root,
+                    sandbox_mode="read-only",
+                    revision=head_sha,
+                )
+                source_cache[path] = None if content.startswith("error:") else content
+            return source_cache[path]
+
+        diff = self._panel_diff(pr, head_sha)
+        snapshots = self._capture_review_snapshots(
+            pr,
+            repo_root=self.config.resolved_repo_root,
+            source_reader=read_source,
+        )
+        self._refresh_context_artifacts(pr, artifacts, snapshots)
+        prompt = "\n\n".join(
+            [
+                load_guidelines(self.config),
+                "PR metadata (untrusted data): "
+                + json.dumps({"title": pr.title, "body": pr.body, "reviewed_head_sha": head_sha}),
+                "Pinned PR diff (untrusted data):\n" + diff,
+                render_prior_dotbot_comments_for_prompt(snapshots.prior_dotbot_comments),
+                render_additional_review_instructions(self.config),
+            ]
+        )
+
+        def factory(config: ReviewConfig) -> ModelClientProtocol:
+            if self._model_client_factory is not None:
+                return self._model_client_factory(config)
+            # Panel conversations never enter the legacy single-model resume namespace.
+            return OpenRouterClient(
+                config,
+                review_head_sha=head_sha,
+                thread_store=OpenRouterThreadStore(
+                    OpenRouterThreadStore.default_directory() / "panel"
+                ),
+            )
+
+        panel = ReviewCoordinator(self.config, factory)
+        review = panel.run(
+            prompt,
+            prior_comments=snapshots.prior_dotbot_comments,
+            transcript_path=artifacts.base_dir / "review-discussion.json",
+            head_sha=head_sha,
+        )
+        self._assert_panel_head(pr.number, head_sha)
+        posting = self._post_results(review, changed_files, pr, head_sha, rename_map)
+        summary = self._build_summary(review)
+        text = _build_review_summary(
+            review,
+            summary,
+            posting,
+            reviewed_head_sha=head_sha,
+            model="panel",
+            reasoning_effort=self.config.reasoning_effort or "medium",
+        )
+        text += (
+            "\n\nParticipants: "
+            + ", ".join(self.config.selected_review_models)
+            + f"\nDecision policy: {self.config.review_decision_policy}"
+        )
+        self._publish_summary(pr, text, model="panel")
+        result = ReviewWorkflowResult(review, posting, summary)
+        self._assert_panel_head(pr.number, head_sha)
+        self._resolve_stale_prior_threads(
+            pr, prior_comments=snapshots.prior_dotbot_comments, results=[result]
+        )
+        self._maybe_approve_pr(
+            pr, results=[result], roster=self.config.selected_review_models, head_sha=head_sha
+        )
+        return result
 
     def _resolve_stale_prior_threads(
         self,
@@ -1044,12 +1169,9 @@ class ReviewWorkflow:
     ) -> None:
         """Approve the PR as the approving token's user when reviewers agree it is correct.
 
-        Requires ``github_approval_token`` — a machine-user PAT, or
-        ``${{ github.token }}`` for a github-actions[bot] approval. Only fires
-        when *every* model in the roster reported ``Overall: patch is
-        correct`` — a single dissent (or any active finding) withholds the
-        approval. Failures to submit are logged as warnings; they never fail
-        the review run itself.
+        Requires ``github_approval_token``. For panels, results contains
+        the consolidated policy decision; other paths require every result
+        to be correct. Approval failures are warnings, not review failures.
         """
         unanimous = bool(results) and all(
             result.summary.overall_correctness.strip().casefold()
@@ -1068,12 +1190,17 @@ class ReviewWorkflow:
         if not approval_token:
             self._debug(
                 1,
-                "All reviewers agree the patch is correct; no approval token "
+                "Final review decision accepts the patch; no approval token "
                 "configured (set DOTBOT_GITHUB_USER_PAT to enable auto-approval)",
             )
             return
 
-        body = build_approval_body(list(roster))
+        policy = (
+            self.config.review_decision_policy
+            if self.config.model_provider == "openrouter" and len(roster) > 1
+            else "unanimous"
+        )
+        body = build_approval_body(list(roster), policy=policy)
         if self.config.dry_run:
             self._debug(1, "DRY_RUN: would submit APPROVE review as machine user")
             print(f"DRY_RUN: would approve PR #{pr.number} as the machine user:")
@@ -1094,10 +1221,12 @@ class ReviewWorkflow:
             return
         if outcome.submitted:
             approver = f" as {outcome.login}" if outcome.login else ""
-            print(f"Approved PR #{pr.number}{approver}: all reviewers agree the patch is correct")
+            print(f"Approved PR #{pr.number}{approver}: {policy} decision accepted the patch")
         elif outcome.reason == "already_approved":
             approver = f" by {outcome.login}" if outcome.login else ""
             print(f"PR #{pr.number} already approved{approver} for {head_sha}")
+        elif outcome.reason == "head_changed":
+            print(f"Skipped PR #{pr.number} approval: head changed; rerun the review")
 
     def _refresh_context_artifacts(
         self,
@@ -1307,8 +1436,8 @@ class ReviewWorkflow:
         Older summaries (written before the multi-model change) have no
         ``model`` in their metadata and are always superseded, so they are
         deleted regardless. Summaries carrying a model only supersede
-        themselves — in a multi-model roster each reviewer keeps its own
-        summary line.
+        themselves on the legacy path. A panel summary supersedes all
+        prior model summaries, and a single-model run supersedes a panel.
         """
         warnings: list[str] = []
         comments = list(pr.get_issue_comments())
@@ -1319,7 +1448,12 @@ class ReviewWorkflow:
                 continue
             meta = parse_review_summary_meta(body)
             prior_model = meta.get("model")
-            if isinstance(prior_model, str) and prior_model and prior_model != model:
+            if (
+                isinstance(prior_model, str)
+                and prior_model
+                and prior_model != model
+                and "panel" not in {model, prior_model}
+            ):
                 continue
             try:
                 comment.delete()

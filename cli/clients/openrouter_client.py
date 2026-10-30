@@ -49,7 +49,7 @@ from ..core.exceptions import ConfigurationError, DotBotExecutionError
 from ..core.models import build_openrouter_response_format
 from .openrouter_stream import OpenRouterStreamPrinter, StreamingResult
 from .openrouter_thread_store import OpenRouterThreadStore
-from .openrouter_tools import TOOL_SPECS, execute_tool
+from .openrouter_tools import READ_FILE_TOOL, READ_ONLY_TOOL_SPECS, TOOL_SPECS, execute_tool
 
 OPENROUTER_CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 OPENROUTER_REFERER = "https://github.com/dotcms/openrouter-code-review-action"
@@ -126,6 +126,7 @@ class OpenRouterClient:
         stream_transport: StreamTransport | None = None,
         thread_store: OpenRouterThreadStore | None = None,
         max_tool_iterations: int = DEFAULT_MAX_TOOL_ITERATIONS,
+        review_head_sha: str | None = None,
     ) -> None:
         self.config = config
         self._debug = make_debug(config)
@@ -135,6 +136,7 @@ class OpenRouterClient:
             OpenRouterThreadStore.default_directory()
         )
         self._max_tool_iterations = max(1, max_tool_iterations)
+        self._review_head_sha = review_head_sha
         self._usage_totals: dict[str, int] = {}
         self._request_count = 0
 
@@ -275,6 +277,7 @@ class OpenRouterClient:
                 model_name=model_name,
                 reasoning_effort=reasoning_effort,
                 stream_enabled=stream_enabled,
+                read_only=sandbox_mode == "read-only",
             )
             self._log_request(result, model_name=model_name, elapsed=time.monotonic() - started)
             tool_calls = _tool_calls_list(result)
@@ -295,6 +298,7 @@ class OpenRouterClient:
                     _tool_call_arguments(call),
                     repo_root=self.config.resolved_repo_root,
                     sandbox_mode=sandbox_mode,
+                    revision=self._review_head_sha,
                 )
                 self._debug(2, f"[openrouter-tool] {tool_name} -> {len(output)} chars")
                 messages.append(
@@ -329,6 +333,7 @@ class OpenRouterClient:
         reasoning_effort: str | None,
         stream_enabled: bool,
         include_tools: bool = True,
+        read_only: bool = False,
     ) -> StreamingResult:
         payload: dict[str, Any] = {
             "model": self._resolved_model(model_name, online_suffix=True),
@@ -336,7 +341,12 @@ class OpenRouterClient:
             "reasoning": {"effort": self._resolve_effort(reasoning_effort)},
         }
         if include_tools:
-            payload["tools"] = TOOL_SPECS
+            tools = TOOL_SPECS
+            if read_only:
+                tools = (
+                    READ_ONLY_TOOL_SPECS if self._review_head_sha is not None else [READ_FILE_TOOL]
+                )
+            payload["tools"] = tools
             payload["tool_choice"] = "auto"
         if stream_enabled:
             return self._request_stream(payload)

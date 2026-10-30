@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -193,6 +194,7 @@ def annotate_patch_with_line_numbers(patch: str) -> str:
 def to_relative_path(abs_path: str, repo_root: Path) -> str:
     """Convert an absolute path to a relative path under repo_root."""
     try:
-        return str(Path(abs_path).resolve().relative_to(repo_root))
+        # Diff paths belong to Git, not to symlink targets in the live checkout.
+        return str(Path(os.path.abspath(abs_path)).relative_to(repo_root.resolve()))
     except Exception:
         return abs_path.lstrip("./")

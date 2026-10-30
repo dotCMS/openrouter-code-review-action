@@ -59,6 +59,7 @@ class _FakeApprovalPR:
     def __init__(self, reviews: list[_FakeReview] | None = None) -> None:
         self._reviews = reviews or []
         self._requester = _FakeRequester()
+        self.head = SimpleNamespace(sha="abc123")
 
     def get_reviews(self) -> list[_FakeReview]:
         return list(self._reviews)
@@ -314,6 +315,26 @@ def test_submit_pr_approval_ignores_unmarked_approval_when_login_unknown(
 
     assert outcome.submitted is True
     assert len(pr._requester.requests) == 1
+
+
+def test_submit_pr_approval_refuses_a_head_that_changed_before_submission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pr = _FakeApprovalPR()
+    pr.head.sha = "new-head"
+    _patch_github(monkeypatch, _FakeGithub(repo=_FakeApprovalRepo(pr)))
+    _, debug = _debug_spy()
+    outcome = submit_pr_approval(
+        repository="owner/repo",
+        pr_number=7,
+        head_sha="abc123",
+        token="token",
+        body="approval",
+        debug=debug,
+    )
+    assert not outcome.submitted
+    assert outcome.reason == "head_changed"
+    assert pr._requester.requests == []
 
 
 def test_build_approval_body_lists_models() -> None:

@@ -51,7 +51,7 @@ jobs:
       # the action's `review_models` INPUT is additive (it would run the
       # variable's models alongside the default deepseek primary, which is how
       # a 3-reviewer roster happened on PR #843). First entry = primary
-      # reviewer; the rest are the "fight" secondaries. When the variable is
+      # reviewer; the rest join its collaborative review panel. When the variable is
       # unset, nothing is rendered and the action's own defaults stand.
       - name: Override review roster from DOTBOT_REVIEW_MODELS (when set)
         if: ${{ vars.DOTBOT_REVIEW_MODELS != '' }}
@@ -68,16 +68,28 @@ jobs:
             echo "::warning::DOTBOT_REVIEW_MODELS set but parsed empty — using action defaults"
             exit 0
           fi
-          {
-            echo "review:"
-            echo "  model: ${MODELS[0]}"
-            if (( ${#MODELS[@]} > 1 )); then
-              echo "  models:"
-              for m in "${MODELS[@]:1}"; do echo "    - ${m}"; done
-            fi
-          } > .openrouter-review.yml
-          echo "Rendered .openrouter-review.yml from DOTBOT_REVIEW_MODELS:"
-          cat .openrouter-review.yml
+          # Preserve policy, discussion limits, and act settings when replacing only the roster.
+          python3 - "${MODELS[@]}" <<'PY'
+          import sys
+          from pathlib import Path
+          import yaml
+
+          path = Path(".openrouter-review.yml")
+          config = yaml.safe_load(path.read_text()) if path.exists() else {}
+          if config is None:
+              config = {}
+          if not isinstance(config, dict):
+              raise SystemExit("Model config must be a mapping")
+          review = config.setdefault("review", {})
+          if not isinstance(review, dict):
+              raise SystemExit("review config must be a mapping")
+          review["model"] = sys.argv[1]
+          review.pop("models", None)
+          if len(sys.argv) > 2:
+              review["models"] = sys.argv[2:]
+          path.write_text(yaml.safe_dump(config, sort_keys=False))
+          PY
+          echo "Updated review roster from DOTBOT_REVIEW_MODELS"
       # Always run the action's latest release via the @latest ref. Pinning to a
       # SHA is the more audit-friendly choice, but we own this repo and cut every
       # release here (auto-release.yml), so the moving `latest` tag is equally
@@ -92,7 +104,7 @@ jobs:
           mode: review
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
           model: deepseek/deepseek-v4-pro-0813
-          # Auto-approval when every reviewer reports "patch is correct".
+          # Auto-approval follows review.decision.policy (unanimous by default).
           # DOTBOT_GITHUB_USER_PAT (the machine user, dotCMS-Machine-User) is
           # preferred: the approval is a named-user approval, and the token's
           # user must differ from the PR author or GitHub rejects it. Falls back

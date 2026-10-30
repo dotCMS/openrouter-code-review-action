@@ -27,6 +27,7 @@ cli/
 ├── review/
 │   ├── __init__.py
 │   ├── artifacts.py           # Review artifact persistence + summary rendering
+│   ├── coordinator.py         # Concurrent review panel, discussion, and decision policies
 │   ├── dedupe.py              # Duplicate-detection helpers
 │   ├── posting.py             # Inline comment payload/build/post helpers
 │   ├── review_prompt.py       # Review prompt composition
@@ -94,6 +95,41 @@ Review posting behavior:
 - dotbot posts a PR-level issue comment with a review summary.
 - Findings are posted as standalone inline PR review comments on the relevant lines.
 
+### Collaborative review
+
+With two or more distinct OpenRouter models, `ReviewWorkflow` uses a bounded
+coordinator rather than publishing sequential independent reviews. Investigations
+and each discussion round run concurrently over isolated clients. Round barriers
+ensure every participant receives the same complete prior transcript. Models
+reinspect pinned-commit code using read-only tools and explicitly retain/reject
+stable issue IDs with reasons and evidence.
+
+Configure in `.openrouter-review.yml`:
+
+```yaml
+review:
+  model: deepseek/deepseek-v4-pro-0813
+  models: [openai/gpt-5]
+  discussion_rounds: 2  # 1–5
+  decision:
+    policy: unanimous  # or lead; the primary model adjudicates
+```
+
+Unanimous mode preserves all final retained issues and blocks approval on dissent.
+Lead mode adds a primary-reviewer adjudication pass. Both fail closed on an
+incomplete panel, timeout, malformed output, or changed PR head. Only the final
+findings and one summary are posted; debate remains in attributed run logs
+(subject to stream settings) and `.dotbot-context/review-discussion.json`.
+Configured credentials are redacted; other sensitive source information may still
+appear in discussion, so protect log access. No private reasoning stream is logged.
+
+The checkout needs both base/head commits for the pinned diff and inspection.
+Panels start fresh and save threads in a separate `panel/` namespace rather than
+resuming an old verdict. Single-model resume and legacy-provider execution are
+unchanged. Each pass uses the existing model timeout; already-issued provider
+requests are abandoned, not remotely cancelled, on timeout. Exact finding text
+and locations are deduplicated; semantic duplicates should reuse ledger IDs.
+
 Comment-triggered edits
 
 - Add a comment on the PR that starts with:
@@ -142,7 +178,7 @@ pytest tests/ -v
 
 ## Review Resume Between Pushes
 
-- Review mode can resume the previous dotbot thread when a PR receives new commits.
+- Single-model review can resume the previous dotbot thread when a PR receives new commits; collaborative panels always deliberate afresh.
 - The summary issue comment stores the last reviewed head SHA in hidden metadata.
 - GitHub Actions review runs restore an isolated review-only `DOTBOT_HOME` cache keyed by repository, PR number, model, and reviewed SHA.
 - When the prior reviewed SHA is still an ancestor of the current head and the cached session index contains a thread, the workflow resumes that thread and narrows the prompt to `previous_reviewed_sha..HEAD`.

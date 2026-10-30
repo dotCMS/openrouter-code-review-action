@@ -243,6 +243,7 @@ class _FakeCodexClient:
         sandbox_mode: str,
         model_name: str | None = None,
         resume_thread_id: str | None = None,
+        suppress_stream: bool = False,
     ) -> str:
         self.calls.append(
             {
@@ -1515,8 +1516,9 @@ def test_process_review_wires_real_artifacts_and_inline_posting(tmp_path: Path) 
     }
 
 
-def test_process_review_runs_each_model_in_roster_and_posts_per_model_summary(
+def test_process_review_runs_panel_and_posts_one_summary(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     sample_file = tmp_path / "src.py"
     sample_file.write_text("old\nnew\n", encoding="utf-8")
@@ -1550,22 +1552,27 @@ def test_process_review_runs_each_model_in_roster_and_posts_per_model_summary(
         model_client=cast(Any, model_client),
     )
 
+    clients: list[_FakeCodexClient] = []
+
+    def factory(config: ReviewConfig) -> Any:
+        client = _FakeCodexClient(_panel_response(_correct_response()))
+        clients.append(client)
+        return client
+
+    workflow._model_client_factory = factory
+    monkeypatch.setattr(workflow, "_panel_diff", lambda *args: "pinned diff")
     result = workflow.process_review(7)
 
-    # The roster is primary + 2 extras = 3 review passes.
-    assert len(model_client.calls) == 3
-    assert [call["model_name"] for call in model_client.calls] == [
-        DEFAULT_REVIEW_MODEL,
-        "openai/gpt-5",
-        "google/gemini-2.5-pro",
-    ]
-    # One summary posted per reviewer, each tagged with its model.
+    assert len(clients) == 3
+    assert all(len(client.calls) == 3 for client in clients)
+    assert all(call["sandbox_mode"] == "read-only" for client in clients for call in client.calls)
     created = pr.as_issue().created_comments
-    assert len(created) == 3
-    assert f"- Reviewer: {DEFAULT_REVIEW_MODEL}" in created[0]
-    assert "- Reviewer: openai/gpt-5" in created[1]
-    assert "- Reviewer: google/gemini-2.5-pro" in created[2]
+    assert len(created) == 1
+    assert "- Reviewer: panel" in created[0]
+    assert all(model in created[0] for model in workflow.config.selected_review_models)
+    assert "private debate contribution" not in created[0]
     assert result.summary.overall_correctness == "patch is correct"
+    assert workflow.config.review_model == DEFAULT_REVIEW_MODEL
 
 
 def test_process_review_openai_provider_uses_config_model_name_not_roster(
@@ -1874,6 +1881,21 @@ def _incorrect_response() -> str:
     )
 
 
+def _panel_response(review_output: str) -> str:
+    payload = json.loads(review_output)
+    payload["overall_explanation"] = (
+        payload["overall_explanation"] or "No actionable issues remain."
+    )
+    return json.dumps(
+        {
+            **payload,
+            "message": "private debate contribution",
+            "security_summary": "No changed trust-boundary issues found; static review only.",
+            "dispositions": [],
+        }
+    )
+
+
 def _patch_approval(
     monkeypatch: pytest.MonkeyPatch,
 ) -> list[dict[str, Any]]:
@@ -1907,6 +1929,10 @@ def test_process_review_approves_pr_when_all_models_correct(
         github_client=cast(Any, github_client),
         model_client=cast(Any, model_client),
     )
+    workflow._model_client_factory = lambda config: cast(
+        Any, _FakeCodexClient(_panel_response(_correct_response()))
+    )
+    monkeypatch.setattr(workflow, "_panel_diff", lambda *args: "pinned diff")
     approval_calls = _patch_approval(monkeypatch)
 
     workflow.process_review(7)
@@ -1936,13 +1962,23 @@ def test_process_review_skips_approval_when_any_model_dissents(
         github_client=cast(Any, github_client),
         model_client=cast(Any, model_client),
     )
+    workflow._model_client_factory = lambda config: cast(
+        Any,
+        _FakeCodexClient(
+            _panel_response(
+                _correct_response()
+                if config.review_model == DEFAULT_REVIEW_MODEL
+                else _incorrect_response()
+            )
+        ),
+    )
+    monkeypatch.setattr(workflow, "_panel_diff", lambda *args: "pinned diff")
     approval_calls = _patch_approval(monkeypatch)
 
     workflow.process_review(7)
 
     assert approval_calls == []
-    # Review summaries still posted normally.
-    assert len(pr.as_issue().created_comments) == 2
+    assert len(pr.as_issue().created_comments) == 1
 
 
 def test_process_review_without_token_skips_approval_but_posts_comments(
@@ -2265,3 +2301,275 @@ def test_process_review_resolves_at_most_200_prior_threads(tmp_path: Path) -> No
     assert "thread-1" in github_client.resolved_thread_ids
     assert "thread-200" in github_client.resolved_thread_ids
     assert "thread-201" not in github_client.resolved_thread_ids
+
+
+class _CallbackPanelClient:
+    def __init__(self, callback: Any) -> None:
+        self.callback = callback
+
+    def execute_structured(self, prompt: str, **kwargs: Any) -> str:
+        return self.callback(prompt, kwargs)
+
+
+def test_panel_publishes_only_final_deduplicated_findings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / "src.py").write_text("new\n")
+    pr = _FakePR()
+    github_client = _FakeGitHubClient(pr)
+    calls: list[str] = []
+
+    def respond(prompt: str, kwargs: dict[str, Any]) -> str:
+        assert github_client.inline_comments == []
+        assert pr.as_issue().created_comments == []
+        assert github_client.resolved_thread_ids == []
+        calls.append(kwargs["model_name"])
+        payload = json.loads(_panel_response(_incorrect_response()))
+        ledger = json.loads(
+            prompt.split("Issue ledger (data):\n", 1)[1].split("\nPrevious completed rounds", 1)[0]
+        )
+        payload["dispositions"] = [
+            {
+                "issue_id": item["issue_id"],
+                "action": "retain",
+                "reason": "Still reachable",
+                "evidence": "src.py:1: new",
+            }
+            for item in ledger
+        ]
+        if not ledger:
+            payload["findings"] = [
+                {
+                    "title": "[P1] Check the caller",
+                    "body": _structured_review_body("new"),
+                    "confidence_score": 0.9,
+                    "priority": 1,
+                    "code_location": {
+                        "absolute_file_path": str(tmp_path / "src.py"),
+                        "line_range": {"start": 1, "end": 1},
+                    },
+                }
+            ]
+        return json.dumps(payload)
+
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path, review_models=("secondary",)),
+        github_client=cast(Any, github_client),
+        model_client_factory=lambda config: cast(Any, _CallbackPanelClient(respond)),
+    )
+    monkeypatch.setattr(workflow, "_panel_diff", lambda *args: "pinned diff")
+    approvals = _patch_approval(monkeypatch)
+    result = workflow.process_review(7)
+    assert len(calls) == 6
+    assert len(github_client.inline_comments) == 1
+    assert len(pr.as_issue().created_comments) == 1
+    assert result.summary.current_findings_count == 1
+    assert approvals == []
+    assert "private debate contribution" not in pr.as_issue().created_comments[0]
+
+
+@pytest.mark.parametrize("failure", ["invalid-output", "head-changed"])
+def test_incomplete_or_stale_panel_cannot_publish_or_approve(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    pr = _FakePR()
+    github_client = _FakeGitHubClient(pr)
+    config = _make_config(tmp_path, review_models=("secondary",), resolve_stale_threads=True)
+    config.review_decision_policy = "lead"
+    config.github_approval_token = "machine-token"
+    workflow = ReviewWorkflow(
+        config,
+        github_client=cast(Any, github_client),
+        model_client_factory=lambda isolated: cast(
+            Any,
+            _FakeCodexClient(
+                "invalid"
+                if failure == "invalid-output" and isolated.review_model == "secondary"
+                else _panel_response(_correct_response())
+            ),
+        ),
+    )
+    monkeypatch.setattr(workflow, "_panel_diff", lambda *args: "pinned diff")
+    if failure == "head-changed":
+        original = github_client.get_pr
+
+        def changed(number: int) -> _FakePR:
+            result = original(number)
+            if len(github_client.calls) > 1:
+                result.head = _FakeHead(sha="new-head")
+            return result
+
+        monkeypatch.setattr(github_client, "get_pr", changed)
+    approvals = _patch_approval(monkeypatch)
+    with pytest.raises((DotBotExecutionError, ReviewContractError)):
+        workflow.process_review(7)
+    assert github_client.inline_comments == []
+    assert github_client.resolved_thread_ids == []
+    assert pr.as_issue().created_comments == []
+    assert approvals == []
+
+
+def test_panel_dry_run_never_mutates_github(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pr = _FakePR()
+    github_client = _FakeGitHubClient(pr)
+    config = _make_config(tmp_path, review_models=("secondary",), dry_run=True)
+    config.github_approval_token = "machine-token"
+    workflow = ReviewWorkflow(
+        config,
+        github_client=cast(Any, github_client),
+        model_client_factory=lambda isolated: cast(
+            Any, _FakeCodexClient(_panel_response(_correct_response()))
+        ),
+    )
+    monkeypatch.setattr(workflow, "_panel_diff", lambda *args: "pinned diff")
+    approvals = _patch_approval(monkeypatch)
+    result = workflow.process_review(7)
+    assert result.posting_outcome.post_result.dry_run
+    assert github_client.inline_comments == []
+    assert github_client.resolved_thread_ids == []
+    assert pr.as_issue().created_comments == []
+    assert approvals == []
+
+
+def test_lead_policy_approval_does_not_claim_unanimity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _make_config(tmp_path, review_models=("secondary",))
+    config.review_decision_policy = "lead"
+    config.github_approval_token = "machine-token"
+    github_client = _FakeGitHubClient(_FakePR())
+    workflow = ReviewWorkflow(
+        config,
+        github_client=cast(Any, github_client),
+        model_client_factory=lambda isolated: cast(
+            Any,
+            _FakeCodexClient(
+                _panel_response(
+                    _incorrect_response()
+                    if isolated.review_model == "secondary"
+                    else _correct_response()
+                )
+            ),
+        ),
+    )
+    monkeypatch.setattr(workflow, "_panel_diff", lambda *args: "pinned diff")
+    approvals = _patch_approval(monkeypatch)
+    workflow.process_review(7)
+    assert len(approvals) == 1
+    assert "lead reviewer" in approvals[0]["body"]
+    assert "all reviewer models" not in approvals[0]["body"]
+
+
+def test_default_panel_clients_pin_source_and_isolate_saved_threads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("OPENROUTER_THREAD_DIR", str(tmp_path / "threads"))
+    created: list[dict[str, Any]] = []
+
+    def factory(config: ReviewConfig, **kwargs: Any) -> Any:
+        created.append({"config": config, **kwargs})
+        return _FakeCodexClient(_panel_response(_correct_response()))
+
+    monkeypatch.setattr("cli.workflows.review_workflow.OpenRouterClient", factory)
+    config = _make_config(tmp_path, review_models=("secondary",))
+    workflow = ReviewWorkflow(
+        config,
+        github_client=cast(Any, _FakeGitHubClient(_FakePR())),
+        model_client=cast(Any, _FakeCodexClient(_correct_response())),
+    )
+    monkeypatch.setattr(workflow, "_panel_diff", lambda *args: "pinned diff")
+    workflow.process_review(7)
+    assert len(created) == 2
+    assert all(item["review_head_sha"] == "head-sha" for item in created)
+    assert all(item["thread_store"].directory == tmp_path / "threads" / "panel" for item in created)
+    assert created[0]["config"] is not created[1]["config"]
+    assert all(item["config"] is not config for item in created)
+
+
+@pytest.mark.parametrize(
+    "model,previous,deleted",
+    [
+        ("panel", "primary", True),
+        ("panel", "secondary", True),
+        ("primary", "panel", True),
+        ("primary", "secondary", False),
+    ],
+)
+def test_panel_summary_supersedes_legacy_summaries(
+    tmp_path: Path,
+    model: str,
+    previous: str,
+    deleted: bool,
+) -> None:
+    comment = _FakeIssueComment(
+        SUMMARY_MARKER
+        + "\n"
+        + render_review_summary_metadata(
+            "head-sha",
+            model=previous,
+            reasoning_effort="medium",
+        )
+    )
+    pr = _FakePR(issue_comments=[comment])
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path),
+        github_client=cast(Any, _FakeGitHubClient(pr)),
+        model_client=cast(Any, _FakeCodexClient(_correct_response())),
+    )
+    assert workflow._delete_prior_summary(cast(Any, pr), model=model) == []
+    assert comment.deleted is deleted
+
+
+@pytest.mark.parametrize("retain", [True, False])
+def test_panel_prior_thread_dispositions_control_resolution_and_approval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    retain: bool,
+) -> None:
+    # The merge checkout differs: applicability must come from the pinned source.
+    (tmp_path / "src.py").write_text("value = 2\n")
+    pr = _prior_thread_pr()
+    github_client = _FakeGitHubClient(pr)
+    config = _make_config(tmp_path, review_models=("secondary",), resolve_stale_threads=True)
+    config.github_approval_token = "machine-token"
+
+    def respond(prompt: str, kwargs: dict[str, Any]) -> str:
+        assert github_client.resolved_thread_ids == []
+        ledger = json.loads(
+            prompt.split("Issue ledger (data):\n", 1)[1].split("\nPrevious completed rounds", 1)[0]
+        )
+        assert ledger and ledger[0]["issue_id"] == "P1"
+        payload = json.loads(
+            _panel_response(_incorrect_response() if retain else _correct_response())
+        )
+        payload["dispositions"] = [
+            {
+                "issue_id": item["issue_id"],
+                "action": "retain" if retain else "reject",
+                "reason": "Checked caller and guard",
+                "evidence": "src.py:1: value = 1",
+            }
+            for item in ledger
+        ]
+        return json.dumps(payload)
+
+    workflow = ReviewWorkflow(
+        config,
+        github_client=cast(Any, github_client),
+        model_client_factory=lambda isolated: cast(Any, _CallbackPanelClient(respond)),
+    )
+    monkeypatch.setattr(workflow, "_panel_diff", lambda *args: "pinned diff")
+    monkeypatch.setattr(
+        "cli.workflows.review_workflow.execute_tool", lambda *args, **kwargs: "value = 1\n"
+    )
+    approvals = _patch_approval(monkeypatch)
+    result = workflow.process_review(7)
+    assert result.summary.carried_forward_count == (1 if retain else 0)
+    assert len(approvals) == (0 if retain else 1)
+    assert github_client.resolved_thread_ids == ([] if retain else ["thread-1"])
+    assert len(pr.as_issue().created_comments) == 1

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from ..core.github_types import IssueCommentLikeProtocol, ReviewLikeProtocol
@@ -44,6 +44,8 @@ def collect_prior_dotbot_review_comments(
     review_threads: Sequence[ReviewThreadSnapshot],
     dotbot_author_logins: set[str],
     repo_root: Path,
+    *,
+    source_reader: Callable[[str], str | None] | None = None,
 ) -> list[PriorDotBotReviewComment]:
     items: list[PriorDotBotReviewComment] = []
     if not dotbot_author_logins:
@@ -71,10 +73,12 @@ def collect_prior_dotbot_review_comments(
                 line=prompt_line,
                 body=first_comment.body,
                 current_code=current_code,
-                is_currently_applicable=_current_code_matches_file(
-                    resolved_repo_root,
-                    first_comment.path,
-                    current_code,
+                is_currently_applicable=(
+                    current_code in (source_reader(first_comment.path) or "")
+                    if source_reader is not None
+                    else _current_code_matches_file(
+                        resolved_repo_root, first_comment.path, current_code
+                    )
                 ),
             )
         )
