@@ -496,10 +496,19 @@ def test_incomplete_or_stale_panel_cannot_publish_or_approve(
     if failure == "run-superseded":
         monkeypatch.setenv("GITHUB_RUN_ID", "100")
         monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+        own = json.dumps({"run_id": "100", "attempt": "1"})
+        pr._issue_comments.append(
+            _FakeIssueComment(
+                f"{SUMMARY_MARKER}\n<!-- dotbot-review-run {own} -->\nin progress",
+                comment_id=1,
+                login="github-actions[bot]",
+            )
+        )
         metadata = json.dumps({"run_id": "101", "attempt": "1"})
         pr._issue_comments.append(
             _FakeIssueComment(
                 f"{SUMMARY_MARKER}\n<!-- dotbot-review-run {metadata} -->\nReview in progress",
+                comment_id=2,
                 login="github-actions[bot]",
             )
         )
@@ -718,7 +727,7 @@ def test_summary_delete_failure_is_reported_without_losing_new_summary(tmp_path:
     assert pr.as_issue().created_comments == ["final summary"]
 
 
-@pytest.mark.parametrize(("run_id", "attempt"), [("101", "1"), ("100", "3")])
+@pytest.mark.parametrize(("run_id", "attempt"), [("101", "1"), ("100", "3"), ("99", "7")])
 def test_old_success_cannot_delete_or_replace_a_newer_summary(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -730,9 +739,15 @@ def test_old_success_cannot_delete_or_replace_a_newer_summary(
     metadata = json.dumps({"run_id": run_id, "attempt": attempt})
     comment = _FakeIssueComment(
         f"{SUMMARY_MARKER}\n<!-- dotbot-review-run {metadata} -->\nReview in progress",
+        comment_id=2,
         login="github-actions[bot]",
     )
-    pr = _FakePR(issue_comments=[comment])
+    own = _FakeIssueComment(
+        f'{SUMMARY_MARKER}\n<!-- dotbot-review-run {{"run_id":"100","attempt":"2"}} -->\nold progress',
+        comment_id=1,
+        login="github-actions[bot]",
+    )
+    pr = _FakePR(issue_comments=[own, comment])
     workflow = ReviewWorkflow(
         _make_config(tmp_path), github_client=cast(Any, _FakeGitHubClient(pr))
     )
@@ -749,7 +764,7 @@ def test_action_updates_only_its_own_attempt_summary(
     monkeypatch.setenv("GITHUB_RUN_ID", "100")
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
     old = _FakeIssueComment(
-        f'{SUMMARY_MARKER}\n<!-- dotbot-review-run {{"run_id":"99","attempt":"1"}} -->\nold verdict',
+        f'{SUMMARY_MARKER}\n<!-- dotbot-review-run {{"run_id":"101","attempt":"1"}} -->\nold verdict',
         login="github-actions[bot]",
     )
     own = _FakeIssueComment(

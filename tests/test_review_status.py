@@ -99,11 +99,22 @@ def test_status_replaces_stale_verdict_with_attempt_link(tmp_path: Path, status:
     assert f"Review {status.replace('_', ' ')}" in body
 
 
-@pytest.mark.parametrize(("prior_run", "prior_attempt"), [("101", "1"), ("100", "3")])
-def test_old_run_cannot_overwrite_newer_run_or_attempt(
-    tmp_path: Path, prior_run: str, prior_attempt: str
-) -> None:
-    assert not _report(tmp_path, prior_run=prior_run, prior_attempt=prior_attempt)["mutations"]
+def test_older_workflow_rerun_can_start_a_new_attempt(tmp_path: Path) -> None:
+    result = _report(tmp_path, status="in_progress", prior_run="101")
+    assert result["mutations"][0][0] == "create"
+
+
+def test_obsolete_attempt_of_same_workflow_does_not_create_new_status(tmp_path: Path) -> None:
+    assert not _report(tmp_path, prior_run="100", prior_attempt="3")["mutations"]
+
+
+@pytest.mark.parametrize("obsolete", ["attempt", "head"])
+def test_obsolete_startup_stops_before_the_cli(tmp_path: Path, obsolete: str) -> None:
+    with pytest.raises(subprocess.CalledProcessError):
+        if obsolete == "attempt":
+            _report(tmp_path, status="in_progress", prior_run="100", prior_attempt="3")
+        else:
+            _report(tmp_path, status="in_progress", head="new-head")
 
 
 def test_legacy_success_summary_is_replaced_on_failure(tmp_path: Path) -> None:
@@ -121,6 +132,15 @@ def test_failure_replaces_its_own_attempts_completed_verdict(tmp_path: Path) -> 
 
 def test_cancelled_old_head_cannot_overwrite_current_head_status(tmp_path: Path) -> None:
     assert not _report(tmp_path, status="cancelled", head="new-head")["mutations"]
+
+
+def test_superseded_head_finalizes_its_existing_attempt_comment(tmp_path: Path) -> None:
+    result = _report(
+        tmp_path, status="cancelled", head="new-head", prior_run="100", prior_attempt="2"
+    )
+    assert result["mutations"][0][0] == "update"
+    assert result["mutations"][0][1]["comment_id"] == 7
+    assert "Review cancelled" in result["mutations"][0][1]["body"]
 
 
 def test_old_failed_run_updates_only_its_own_comment(tmp_path: Path) -> None:

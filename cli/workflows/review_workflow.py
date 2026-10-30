@@ -716,12 +716,19 @@ class ReviewWorkflow:
         run_id = os.environ.get("GITHUB_RUN_ID")
         if run_id:
             current = (int(run_id), int(os.environ.get("GITHUB_RUN_ATTEMPT", "1")))
+            own_comment_id: int | None = None
+            latest_comment_id = 0
             for comment in pr.get_issue_comments():
                 if comment.user is None or comment.user.login != "github-actions[bot]":
                     continue
-                previous = review_run_identity(comment.body or "")
-                if previous is not None and previous > current:
-                    raise ReviewContractError("A newer review run owns the PR summary")
+                identity = review_run_identity(comment.body or "")
+                if identity is None:
+                    continue
+                latest_comment_id = max(latest_comment_id, comment.id)
+                if identity == current:
+                    own_comment_id = max(own_comment_id or 0, comment.id)
+            if own_comment_id is not None and latest_comment_id > own_comment_id:
+                raise ReviewContractError("A newer review run owns the PR summary")
 
     def _delete_prior_summary(self, pr: PullRequestLikeProtocol) -> list[str]:
         """The local CLI consolidated summary supersedes previous dotbot summaries."""

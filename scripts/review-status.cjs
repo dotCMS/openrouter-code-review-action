@@ -11,15 +11,11 @@ module.exports = async function reportReviewStatus({ github, context, core, stat
     head_sha: pr.head.sha,
   };
   const current = await github.rest.pulls.get({ owner, repo, pull_number: pr.number });
-  if (current.data.head.sha !== run.head_sha) {
-    core.info('Review was superseded by a new PR head; leaving its summary untouched.');
-    return;
-  }
   const comments = await github.paginate(github.rest.issues.listComments, {
     owner, repo, issue_number: pr.number, per_page: 100,
   });
   let summary = null;
-  let newer = false;
+  let laterAttempt = false;
   for (const comment of comments) {
     if (comment.user?.login !== 'github-actions[bot]' || !comment.body?.startsWith(SUMMARY_MARKER)) continue;
     const line = comment.body.split('\n')[1] || '';
@@ -33,12 +29,20 @@ module.exports = async function reportReviewStatus({ github, context, core, stat
     }
     if (!previous || !/^\d+$/.test(previous.run_id) || !/^\d+$/.test(previous.attempt)) continue;
     if (previous.run_id === run.run_id && previous.attempt === run.attempt) summary = comment;
-    if (BigInt(previous.run_id) > BigInt(run.run_id) ||
-        (previous.run_id === run.run_id && BigInt(previous.attempt) > BigInt(run.attempt))) newer = true;
+    if (previous.run_id === run.run_id && BigInt(previous.attempt) > BigInt(run.attempt)) laterAttempt = true;
   }
-  if (!summary && newer) {
-    core.info('A newer review run exists; not creating an obsolete status comment.');
+  if (!summary && laterAttempt) {
+    if (status === 'in_progress') throw new Error('A later attempt of this workflow run already exists.');
+    core.info('A later attempt of this workflow run already exists.');
     return;
+  }
+  if (current.data.head.sha !== run.head_sha) {
+    if (!summary) {
+      if (status === 'in_progress') throw new Error('PR head changed before review startup.');
+      core.info('PR head changed; not creating an obsolete status comment.');
+      return;
+    }
+    if (status === 'in_progress') status = 'cancelled';
   }
   const headings = {
     in_progress: '⏳ Review in progress',
