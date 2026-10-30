@@ -189,6 +189,10 @@ def test_panel_diff_uses_exact_commits_and_never_runs_external_diff(
         ".env.production.example",
         ".env.production.sample",
         ".ENV.PRODUCTION.EXAMPLE",
+        ".pem",
+        ".key",
+        ".PEM",
+        ".KEY",
     ],
 )
 def test_credential_file_changes_require_human_review_before_any_diff_contents(

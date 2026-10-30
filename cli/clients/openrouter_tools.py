@@ -171,12 +171,12 @@ def is_reviewable_path(path: Path, repo_root: Path) -> bool:
     if not resolved.is_relative_to(repo_root.resolve()):
         return False
     parts = resolved.relative_to(repo_root.resolve()).parts
-    name, suffix = resolved.name.casefold(), resolved.suffix.casefold()
+    name = resolved.name.casefold()
     return not (
         ".git" in parts
         or name == ".env"
         or (name.startswith(".env.") and name not in {".env.example", ".env.sample"})
-        or suffix in {".pem", ".key"}
+        or name.endswith((".pem", ".key"))
     )
 
 
