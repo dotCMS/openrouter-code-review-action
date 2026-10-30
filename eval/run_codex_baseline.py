@@ -404,7 +404,8 @@ def _invoke_codex_sdk(pr: SamplePR, repo_path: Path) -> dict[str, Any]:
         stream_output=False,
         repo_root=repo_path,
     )
-    snapshot = GitHubClient(config).get_pr(pr.pr)
+    github_client = GitHubClient(config)
+    snapshot = github_client.get_pr(pr.pr)
     # Both endpoints must match the pinned registry revision exactly. We
     # use the stored base directly — never infer it from the head's
     # parents or a merge-base — so the reviewed diff is reproducible.
@@ -432,6 +433,13 @@ def _invoke_codex_sdk(pr: SamplePR, repo_path: Path) -> dict[str, Any]:
     finally:
         os.chdir(previous_cwd)
 
+    fresh = github_client.get_pr(pr.pr)
+    if (
+        fresh.head is None
+        or fresh.base is None
+        or (fresh.head.sha, fresh.base.sha) != (pr.head_sha, pr.base_sha)
+    ):
+        raise RuntimeError("Benchmark PR changed during the SDK session")
     try:
         payload = json.loads(output)
     except json.JSONDecodeError as exc:

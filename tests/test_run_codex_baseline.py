@@ -334,6 +334,31 @@ def test_invoke_codex_sdk_uses_read_only_structured_review(monkeypatch, tmp_path
     assert _FakeCodexClient.last_config.openai_api_key == "test-key"
 
 
+@pytest.mark.parametrize("changed", ["head", "base"])
+def test_sdk_capture_rechecks_both_revisions_after_execution(monkeypatch, tmp_path, changed):
+    pinned = SimpleNamespace(
+        head=SimpleNamespace(sha="deadbeef" * 5), base=SimpleNamespace(sha="b" * 40)
+    )
+    fresh = SimpleNamespace(
+        head=SimpleNamespace(sha="deadbeef" * 5), base=SimpleNamespace(sha="b" * 40)
+    )
+    if changed == "head":
+        fresh.head.sha = "new-head"
+    else:
+        fresh.base.sha = "new-base"
+    snapshots = iter([pinned, fresh])
+    monkeypatch.setattr(
+        "cli.clients.github_client.GitHubClient",
+        lambda _: SimpleNamespace(get_pr=lambda n: next(snapshots)),
+    )
+    monkeypatch.setattr("cli.clients.codex_client.CodexClient", _FakeCodexClient)
+    monkeypatch.setattr(runner.subprocess, "run", lambda *a, **kw: SimpleNamespace(returncode=0))
+    previous = Path.cwd()
+    with pytest.raises(RuntimeError, match="changed during the SDK session"):
+        runner._invoke_codex_sdk(_fixture_pr(), tmp_path)
+    assert Path.cwd() == previous
+
+
 @pytest.mark.parametrize(
     ("head", "base"),
     [
