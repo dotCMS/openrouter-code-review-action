@@ -804,19 +804,20 @@ def test_review_action_uses_expected_model_and_drops_legacy_resume_cache() -> No
     # predates the github_approval_token input.
     assert "dotCMS/openrouter-code-review-action@" in review_workflow
     assert "dotCMS/openrouter-code-review-action@" in act_workflow
-    # Both workflows track the same moving `latest` tag instead of a frozen
-    # SHA. dotCMS owns this repo and cuts every release here (auto-release.yml),
-    # so the tag is as trusted as a SHA — and it can never lag an input the
-    # workflows pass. A pin predating an input makes GitHub silently drop it
-    # (that is how github_approval_token was ignored and dotbot never approved a
-    # PR), which is exactly why we float on `latest` rather than bump a SHA.
-    expected_action_pin = "latest"
-    pins = {
-        line.split("dotCMS/openrouter-code-review-action@", 1)[1].strip()
-        for line in (review_workflow + act_workflow).splitlines()
-        if "dotCMS/openrouter-code-review-action@" in line
+    # The review preview executes one explicitly validated immutable candidate,
+    # never the incoming PR SHA. Act remains on the maintainer-controlled tag.
+    expected = {
+        "review": "bfcfb631a36c26312c9233fe20bfd18b9aa13c78",
+        "act": "latest",
     }
-    assert pins == {expected_action_pin}, f"unexpected action pins: {sorted(pins)}"
+    for job_name, source in (("review", review_workflow), ("act", act_workflow)):
+        workflow = yaml.safe_load(source)
+        pins = [
+            step["uses"]
+            for step in workflow["jobs"][job_name]["steps"]
+            if str(step.get("uses", "")).startswith("dotCMS/openrouter-code-review-action@")
+        ]
+        assert pins == ["dotCMS/openrouter-code-review-action@" + expected[job_name]]
     # Auto-approval when every reviewer agrees: prefer the machine-user PAT,
     # fall back to the workflow token so a repo without the secret still approves.
     assert (
@@ -830,9 +831,7 @@ def test_self_review_supplies_the_actual_checkout_root() -> None:
         Path(".github/workflows/dotbot-review.yml").read_text(encoding="utf-8")
     )
     action_step = next(
-        step
-        for step in workflow["jobs"]["review"]["steps"]
-        if step.get("uses") == "dotCMS/openrouter-code-review-action@latest"
+        step for step in workflow["jobs"]["review"]["steps"] if step.get("id") == "dotbot"
     )
     guidance = action_step["with"]["additional_prompt"]
     assert "${{ github.workspace }}" in guidance
