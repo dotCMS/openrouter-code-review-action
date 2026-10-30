@@ -74,7 +74,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SAMPLE_PATH = REPO_ROOT / "eval" / "sample-prs.yaml"
 RUNS_DIR = REPO_ROOT / "eval" / "runs"
-RUNNER_VERSION = "1"
+RUNNER_VERSION = "2"
 
 # Canonical stdout markers emitted by ``cli.main``. Panel turns stream under
 # ``[review-panel]`` and are intermediate; only ``[review-result]`` carries

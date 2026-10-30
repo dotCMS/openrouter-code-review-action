@@ -213,7 +213,9 @@ OpenRouter captures exercise the collaborative production coordinator, while Cod
 captures call the SDK directly, read-only, with pinned PR head/base and shared
 review guidelines. Their orchestration and prompt context differ; new captures
 are end-to-end workflow comparisons, not evidence of same-prompt parity. Both
-runners retain dry-run/no-publication behavior.
+runners retain dry-run/no-publication behavior. These captures record runner
+version `2`; historical artifacts are not refreshed automatically (use `--force`
+for an intentional paid recapture).
 
 For each PR in `sample-prs.yaml`:
 

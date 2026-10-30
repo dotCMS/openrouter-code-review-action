@@ -76,7 +76,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SAMPLE_PATH = REPO_ROOT / "eval" / "sample-prs.yaml"
 RUNS_DIR = REPO_ROOT / "eval" / "runs"
-RUNNER_VERSION = "1"
+RUNNER_VERSION = "2"
 
 # The legacy Codex baseline is pinned to the model + reasoning effort
 # that was in production use at the time the sample was selected.
