@@ -581,6 +581,7 @@ class ReviewWorkflow:
             print(body)
             return
 
+        self._assert_panel_revision(pr.number, head_sha, base_sha)
         try:
             outcome = submit_pr_approval(
                 repository=self.config.repository,

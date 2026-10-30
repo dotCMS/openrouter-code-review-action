@@ -662,6 +662,68 @@ def test_panel_prior_thread_dispositions_control_resolution_and_approval(
     assert len(pr.as_issue().created_comments) == 1
 
 
+@pytest.mark.parametrize("change", ["attempt", "head", "base"])
+def test_changes_during_thread_resolution_prevent_approval(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    change: str,
+) -> None:
+    monkeypatch.setenv("GITHUB_RUN_ID", "100")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    pr = _prior_thread_pr()
+    pr._issue_comments.append(
+        _FakeIssueComment(
+            f'{SUMMARY_MARKER}\n<!-- dotbot-review-run {{"run_id":"100","attempt":"1"}} -->\nin progress',
+            comment_id=20,
+            login="github-actions[bot]",
+        )
+    )
+    github = _FakeGitHubClient(pr)
+    config = _make_config(tmp_path, resolve_stale_threads=True)
+    config.github_approval_token = "machine-token"
+
+    def respond(prompt: str, **kwargs: Any) -> str:
+        payload = json.loads(_panel_response(_correct_response()))
+        payload["dispositions"] = {
+            "P1": {"action": "reject", "reason": "Fixed", "evidence": "src.py:1"}
+        }
+        return json.dumps(payload)
+
+    workflow = ReviewWorkflow(
+        config,
+        github_client=cast(Any, github),
+        model_client_factory=lambda _: cast(
+            Any, _CallbackPanelClient(lambda prompt, kwargs: respond(prompt))
+        ),
+    )
+    monkeypatch.setattr(
+        "cli.workflows.review_workflow.read_file_at_revision", lambda *args, **kwargs: "value = 1\n"
+    )
+
+    def resolve(pr: _FakePR, thread_id: str) -> None:
+        github.resolved_thread_ids.append(thread_id)
+        if change == "attempt":
+            pr._issue_comments.append(
+                _FakeIssueComment(
+                    f'{SUMMARY_MARKER}\n<!-- dotbot-review-run {{"run_id":"99","attempt":"2"}} -->\nin progress',
+                    comment_id=21,
+                    login="github-actions[bot]",
+                )
+            )
+        elif change == "head":
+            pr.head = _FakeHead(sha="new-head")
+        else:
+            pr.base = _FakeBase(sha="new-base")
+
+    monkeypatch.setattr(github, "resolve_review_thread", resolve)
+    approvals = _patch_approval(monkeypatch)
+    with pytest.raises(ReviewContractError):
+        workflow.process_review(7)
+    assert github.resolved_thread_ids == ["thread-1"]
+    assert not approvals
+
+
 @pytest.fixture(autouse=True)
 def pinned_diff_for_fake_prs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ReviewWorkflow, "_panel_diff", lambda *args: "pinned diff")
