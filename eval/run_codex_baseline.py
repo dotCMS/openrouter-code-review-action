@@ -61,6 +61,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -98,9 +99,13 @@ class SamplePR:
     repo: str
     pr: int
     head_sha: str
+    base_sha: str
     web_search_mode: str
     reasoning_effort: str
     model: str = DEFAULT_BASELINE_MODEL
+    # Legacy registry `head_sha` — the merge commit. Retained only so the
+    # artifact/meta can record it; never used as the reviewed revision.
+    merge_sha: str | None = None
 
 
 def load_sample(path: Path | None = None) -> list[SamplePR]:
@@ -123,18 +128,28 @@ def load_sample(path: Path | None = None) -> list[SamplePR]:
     for entry in raw:
         if not isinstance(entry, Mapping):
             raise SystemExit(f"{path}: each prs[] entry must be a mapping")
+        for field in ("pr_head_sha", "pr_base_sha"):
+            value = entry.get(field)
+            if not isinstance(value, str) or not re.fullmatch(
+                r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})", value
+            ):
+                raise SystemExit(f"{path}: {field} must be an exact commit SHA")
         out.append(
             SamplePR(
                 id=str(entry["id"]),
                 repo=str(entry["repo"]),
                 pr=int(entry["pr"]),
-                head_sha=str(entry["head_sha"]),
+                # The reviewed revision is the PR head, not the legacy
+                # `head_sha` (which holds the merge commit).
+                head_sha=str(entry["pr_head_sha"]).lower(),
+                base_sha=str(entry["pr_base_sha"]).lower(),
                 web_search_mode=str(
                     entry.get("web_search_mode_for_run") or DEFAULT_WEB_SEARCH_MODE
                 ),
                 reasoning_effort=str(
                     entry.get("reasoning_effort_for_run") or DEFAULT_REASONING_EFFORT
                 ),
+                merge_sha=(str(entry["head_sha"]) if entry.get("head_sha") else None),
             )
         )
     return out
@@ -199,6 +214,8 @@ def write_artifact(
         "pr_id": pr.id,
         "run": "codex",
         "head_sha": pr.head_sha,
+        "base_sha": pr.base_sha,
+        "merge_sha": pr.merge_sha,
         "model": pr.model,
         "reasoning_effort": pr.reasoning_effort,
         "web_search_mode": pr.web_search_mode,
@@ -233,6 +250,8 @@ def write_artifact(
         "repo": pr.repo,
         "pr": pr.pr,
         "head_sha": pr.head_sha,
+        "base_sha": pr.base_sha,
+        "merge_sha": pr.merge_sha,
         "model": pr.model,
         "reasoning_effort": pr.reasoning_effort,
         "web_search_mode": pr.web_search_mode,
@@ -271,10 +290,11 @@ def _live_env_ok() -> tuple[bool, str]:
 def _checkout_pr(pr: SamplePR, dest: Path, *, repo_url: str | None = None) -> None:
     """Clone ``pr.repo`` and check out the pinned ``head_sha`` at ``dest``.
 
-    Fetches full history for every branch tip plus the pinned head so
-    the PR base commit and its merge base are present. The read-only
-    Codex agent runs ``git diff <base>...<head>`` in this checkout; a
-    depth-1 head-only fetch omits both the base and the merge base.
+    Fetches full history for every branch tip plus the pinned head and
+    the *pinned* base, so the exact stored base commit is present. The
+    read-only Codex agent runs ``git diff <base>...<head>`` in this
+    checkout; a depth-1 head-only fetch omits both the base and the
+    merge base.
 
     ``repo_url`` overrides the GitHub URL so tests can point at a local
     bare repository instead of the network.
@@ -292,11 +312,17 @@ def _checkout_pr(pr: SamplePR, dest: Path, *, repo_url: str | None = None) -> No
         check=True,
         capture_output=True,
     )
-    # The pinned head may be unreachable from any branch (unmerged PR),
-    # so fetch it explicitly. A server that refuses single-SHA fetches
-    # still leaves the branch fetch above in place.
+    # The pinned head and base may be unreachable from any branch
+    # (unmerged PR / rewritten history), so fetch both explicitly. A
+    # server that refuses single-SHA fetches still leaves the branch
+    # fetch above in place.
     subprocess.run(
         ["git", "-C", str(dest), "fetch", "--no-tags", "origin", pr.head_sha],
+        check=False,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(dest), "fetch", "--no-tags", "origin", pr.base_sha],
         check=False,
         capture_output=True,
     )
@@ -379,11 +405,14 @@ def _invoke_codex_sdk(pr: SamplePR, repo_path: Path) -> dict[str, Any]:
         repo_root=repo_path,
     )
     snapshot = GitHubClient(config).get_pr(pr.pr)
+    # Both endpoints must match the pinned registry revision exactly. We
+    # use the stored base directly — never infer it from the head's
+    # parents or a merge-base — so the reviewed diff is reproducible.
     if snapshot.head is None or snapshot.head.sha != pr.head_sha:
         raise RuntimeError("Benchmark PR head changed; refusing to capture a different revision")
-    if snapshot.base is None or not snapshot.base.sha:
-        raise RuntimeError("Benchmark PR has no base revision")
-    base_sha = snapshot.base.sha
+    if snapshot.base is None or snapshot.base.sha != pr.base_sha:
+        raise RuntimeError("Benchmark PR base changed; refusing to capture a different revision")
+    base_sha = pr.base_sha
     subprocess.run(
         ["git", "-C", str(repo_path), "cat-file", "-e", f"{base_sha}^{{commit}}"],
         check=True,

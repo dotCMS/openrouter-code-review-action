@@ -314,6 +314,9 @@ class ReviewWorkflow:
         expected_head = os.environ.get("DOTBOT_REVIEW_EXPECTED_HEAD_SHA")
         if expected_head and head_sha != expected_head:
             raise ReviewContractError("PR head changed after review startup")
+        expected_base = os.environ.get("DOTBOT_REVIEW_EXPECTED_BASE_SHA")
+        if expected_base and (pr.base is None or pr.base.sha != expected_base):
+            raise ReviewContractError("PR base differs from the pinned review startup revision")
         changed_files = list(pr.get_files())
         rename_map = self._build_rename_map(changed_files)
         self._debug_changed_files(changed_files)

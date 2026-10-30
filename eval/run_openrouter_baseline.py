@@ -59,6 +59,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -102,9 +103,11 @@ class SamplePR:
     repo: str
     pr: int
     head_sha: str
+    base_sha: str
     web_search_mode: str
     reasoning_effort: str
     model: str = DEFAULT_REVIEW_MODEL
+    merge_sha: str | None = None
 
 
 def load_sample(path: Path | None = None) -> list[SamplePR]:
@@ -127,12 +130,20 @@ def load_sample(path: Path | None = None) -> list[SamplePR]:
     for entry in raw:
         if not isinstance(entry, Mapping):
             raise SystemExit(f"{path}: each prs[] entry must be a mapping")
+        for field in ("pr_head_sha", "pr_base_sha"):
+            value = entry.get(field)
+            if not isinstance(value, str) or not re.fullmatch(
+                r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})", value
+            ):
+                raise SystemExit(f"{path}: {field} must be an exact commit SHA")
         out.append(
             SamplePR(
                 id=str(entry["id"]),
                 repo=str(entry["repo"]),
                 pr=int(entry["pr"]),
-                head_sha=str(entry["head_sha"]),
+                head_sha=str(entry["pr_head_sha"]).lower(),
+                base_sha=str(entry["pr_base_sha"]).lower(),
+                merge_sha=str(entry["head_sha"]) if entry.get("head_sha") else None,
                 web_search_mode=str(
                     entry.get("web_search_mode_for_run") or DEFAULT_WEB_SEARCH_MODE
                 ),
@@ -213,6 +224,8 @@ def write_artifact(
         "pr_id": pr.id,
         "run": "openrouter",
         "head_sha": pr.head_sha,
+        "base_sha": pr.base_sha,
+        "merge_sha": pr.merge_sha,
         "model": resolved_model,
         "reasoning_effort": pr.reasoning_effort,
         "web_search_mode": pr.web_search_mode,
@@ -250,6 +263,8 @@ def write_artifact(
         "repo": pr.repo,
         "pr": pr.pr,
         "head_sha": pr.head_sha,
+        "base_sha": pr.base_sha,
+        "merge_sha": pr.merge_sha,
         "model": resolved_model,
         "reasoning_effort": pr.reasoning_effort,
         "web_search_mode": pr.web_search_mode,
@@ -336,6 +351,11 @@ def _checkout_pr(pr: SamplePR, dest: Path, *, repo_url: str | None = None) -> No
         check=True,
         capture_output=True,
     )
+    subprocess.run(
+        ["git", "-C", str(dest), "fetch", "--no-tags", "origin", pr.base_sha],
+        check=True,
+        capture_output=True,
+    )
     # The pinned head may be unreachable from any branch (unmerged PR), so
     # fetch it explicitly, also with full history. A server that refuses
     # single-SHA fetches still leaves the branch fetch above in place.
@@ -400,6 +420,7 @@ def _invoke_review_cli(
     env["PYTHONPATH"] = str(REPO_ROOT) + (os.pathsep + pythonpath if pythonpath else "")
     env["PYTHONSAFEPATH"] = "1"
     env["DOTBOT_REVIEW_EXPECTED_HEAD_SHA"] = pr.head_sha
+    env["DOTBOT_REVIEW_EXPECTED_BASE_SHA"] = pr.base_sha
     env.pop("DOTBOT_REVIEW_STATUS_COMMENT_ID", None)
     proc = subprocess.run(
         cmd,

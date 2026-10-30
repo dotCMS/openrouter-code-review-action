@@ -35,7 +35,9 @@ SAMPLE_DOC = {
             "id": "fixture-pr-1",
             "repo": "owner/repo",
             "pr": 1,
-            "head_sha": "deadbeef" * 5,
+            "head_sha": "a" * 40,
+            "pr_head_sha": "deadbeef" * 5,
+            "pr_base_sha": "b" * 40,
             "web_search_mode_for_run": "disabled",
             "reasoning_effort_for_run": "medium",
         }
@@ -114,6 +116,42 @@ def test_pending_placeholder_when_live_env_missing(isolated_runs):
 # ---------------------------------------------------------------------------
 # Result extraction — the [review-result] marker contract
 # ---------------------------------------------------------------------------
+
+
+def test_both_runners_load_the_same_verified_pr_revisions():
+    from eval import run_codex_baseline as codex_runner
+
+    path = ROOT / "eval/sample-prs.yaml"
+    raw = yaml.safe_load(path.read_text())["prs"]
+    for item, opened, sdk in zip(
+        raw, runner.load_sample(path), codex_runner.load_sample(path), strict=True
+    ):
+        assert opened.head_sha == sdk.head_sha == item["pr_head_sha"]
+        assert opened.base_sha == sdk.base_sha == item["pr_base_sha"]
+        assert opened.merge_sha == sdk.merge_sha == item["head_sha"]
+        assert opened.head_sha != opened.merge_sha
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("pr_head_sha", "refs/heads/main"),
+        ("pr_base_sha", "--upload-pack=evil"),
+        ("pr_base_sha", None),
+        ("pr_head_sha", "1" * 40 + "\n"),
+    ],
+)
+@pytest.mark.parametrize("backend", ["openrouter", "codex"])
+def test_registry_requires_exact_pinned_revisions(tmp_path, field, value, backend):
+    from eval import run_codex_baseline as codex_runner
+
+    doc = json.loads(json.dumps(SAMPLE_DOC))
+    doc["prs"][0][field] = value
+    path = tmp_path / "invalid.yaml"
+    path.write_text(yaml.safe_dump(doc))
+    loader = runner.load_sample if backend == "openrouter" else codex_runner.load_sample
+    with pytest.raises(SystemExit, match="exact commit SHA"):
+        loader(path)
 
 
 def test_extract_uses_final_marker_over_intermediate_incorrect_turns():
@@ -226,6 +264,7 @@ def test_checkout_pr_fetches_full_history_so_base_and_merge_base_exist(tmp_path)
         repo="owner/repo",
         pr=1,
         head_sha=head_sha,
+        base_sha=base_sha,
         web_search_mode="disabled",
         reasoning_effort="medium",
     )
@@ -286,6 +325,7 @@ def test_invoke_review_cli_anchors_to_trusted_source(tmp_path, monkeypatch):
         repo="owner/repo",
         pr=1,
         head_sha="deadbeef" * 5,
+        base_sha="b" * 40,
         web_search_mode="disabled",
         reasoning_effort="medium",
     )
@@ -301,4 +341,5 @@ def test_invoke_review_cli_anchors_to_trusted_source(tmp_path, monkeypatch):
     assert captured["env"]["PYTHONPATH"].split(os.pathsep)[0] == str(runner.REPO_ROOT)
     assert captured["cwd"] == str(runner.REPO_ROOT)
     assert captured["env"]["DOTBOT_REVIEW_EXPECTED_HEAD_SHA"] == pr.head_sha
+    assert captured["env"]["DOTBOT_REVIEW_EXPECTED_BASE_SHA"] == pr.base_sha
     assert "DOTBOT_REVIEW_STATUS_COMMENT_ID" not in captured["env"]

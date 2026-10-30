@@ -37,7 +37,9 @@ SAMPLE_DOC = {
             "id": "fixture-pr-1",
             "repo": "owner/repo",
             "pr": 1,
-            "head_sha": "deadbeef" * 5,  # 40-char SHA
+            "head_sha": "a" * 40,  # legacy merge commit
+            "pr_head_sha": "deadbeef" * 5,  # actual PR head (40-char SHA)
+            "pr_base_sha": "b" * 40,
             "web_search_mode_for_run": "disabled",
             "reasoning_effort_for_run": "medium",
         },
@@ -45,7 +47,9 @@ SAMPLE_DOC = {
             "id": "fixture-pr-2",
             "repo": "owner/repo",
             "pr": 2,
-            "head_sha": "feedface" * 5,
+            "head_sha": "c" * 40,  # legacy merge commit
+            "pr_head_sha": "feedface" * 5,
+            "pr_base_sha": "d" * 40,
             "web_search_mode_for_run": "live",
             "reasoning_effort_for_run": "high",
         },
@@ -83,7 +87,11 @@ def test_load_sample_parses_pinned_metadata(isolated_runs):
     pr1 = sample[0]
     assert pr1.repo == "owner/repo"
     assert pr1.pr == 1
+    # `head_sha` is the actual PR head from `pr_head_sha`; the legacy
+    # `head_sha` merge commit is carried on `merge_sha`.
     assert pr1.head_sha == "deadbeef" * 5
+    assert pr1.base_sha == "b" * 40
+    assert pr1.merge_sha == "a" * 40
     assert pr1.web_search_mode == "disabled"
     assert pr1.reasoning_effort == "medium"
     # Default model pinned to action.yml's prior baseline so re-runs
@@ -97,6 +105,44 @@ def test_load_sample_rejects_non_mapping_top_level(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "SAMPLE_PATH", bad)
     with pytest.raises(SystemExit):
         runner.load_sample()
+
+
+def test_load_sample_requires_pinned_pr_revision_fields(tmp_path, monkeypatch):
+    # A row without pr_head_sha/pr_base_sha must fail loudly rather than
+    # silently fall back to the legacy merge sha.
+    doc = {
+        "prs": [
+            {
+                "id": "x",
+                "repo": "owner/repo",
+                "pr": 1,
+                "head_sha": "a" * 40,
+                "web_search_mode_for_run": "disabled",
+                "reasoning_effort_for_run": "medium",
+            }
+        ]
+    }
+    bad = tmp_path / "sample.yaml"
+    bad.write_text(yaml.safe_dump(doc, sort_keys=False))
+    monkeypatch.setattr(runner, "SAMPLE_PATH", bad)
+    with pytest.raises(SystemExit, match="exact commit SHA"):
+        runner.load_sample()
+
+
+def test_canonical_registry_pins_real_pr_head_distinct_from_legacy_merge():
+    # Regression: the shipped registry's legacy `head_sha` is the merge
+    # commit and differs from the actual PR head, and every row carries a
+    # base revision that exists as a commit during live capture.
+    sample = runner.load_sample()
+    assert sample, "canonical registry must not be empty"
+    for pr in sample:
+        assert pr.merge_sha is not None
+        assert len(pr.merge_sha) == 40 and int(pr.merge_sha, 16) >= 0
+        assert len(pr.head_sha) == 40 and int(pr.head_sha, 16) >= 0
+        assert len(pr.base_sha) == 40 and int(pr.base_sha, 16) >= 0
+        assert pr.head_sha != pr.merge_sha, (
+            f"{pr.id}: pr_head_sha must differ from the legacy merge head_sha"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +163,8 @@ def test_dry_run_only_writes_pending_placeholder_for_every_pr(isolated_runs):
         # Required top-level keys per methodology §4.2.
         assert artifact["pr_id"] == pr_id
         assert artifact["run"] == "codex"
+        assert artifact["base_sha"]
+        assert artifact["merge_sha"]
         assert artifact["model"] == runner.DEFAULT_BASELINE_MODEL
         assert artifact["prior_review_state"] is None
         # Placeholder has no review payload yet — downstream scoring
@@ -245,8 +293,10 @@ def _fixture_pr() -> runner.SamplePR:
         repo="owner/repo",
         pr=1,
         head_sha="deadbeef" * 5,
+        base_sha="b" * 40,
         web_search_mode="disabled",
         reasoning_effort="medium",
+        merge_sha="a" * 40,
     )
 
 
@@ -285,7 +335,14 @@ def test_invoke_codex_sdk_uses_read_only_structured_review(monkeypatch, tmp_path
 
 
 @pytest.mark.parametrize(
-    ("head", "base"), [(None, "b" * 40), ("different-head", "b" * 40), ("deadbeef" * 5, None)]
+    ("head", "base"),
+    [
+        (None, "b" * 40),
+        ("different-head", "b" * 40),
+        ("deadbeef" * 5, None),
+        # Negative case: the live PR base must equal the pinned base.
+        ("deadbeef" * 5, "different-base"),
+    ],
 )
 def test_sdk_capture_rejects_missing_or_changed_revision_before_execution(
     monkeypatch, tmp_path, head, base
@@ -366,6 +423,7 @@ def test_checkout_pr_fetches_full_history_for_base_evidence(tmp_path):
         repo=pr.repo,
         pr=pr.pr,
         head_sha=head_sha,
+        base_sha=base_sha,
         web_search_mode=pr.web_search_mode,
         reasoning_effort=pr.reasoning_effort,
     )
