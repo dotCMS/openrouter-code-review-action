@@ -17,10 +17,10 @@ review:
   model: deepseek/deepseek-v4-pro-0813
   reasoning_effort: medium       # minimal | low | medium | high
   web_search_mode: live          # disabled | cached | live
-  # With additional `models`, investigate concurrently and discuss before posting.
-  discussion_rounds: 2          # 1–5; ignored for single-model review
-  decision:
-    policy: unanimous           # unanimous | lead (primary model adjudicates)
+  # Optional panel defaults; leave commented for compatibility with older action releases.
+  # discussion_rounds: 2        # 1–5; ignored for single-model review
+  # decision:
+  #   policy: unanimous         # unanimous | lead (primary model adjudicates)
 
 act:
   model: anthropic/claude-opus-4.7

@@ -7,7 +7,13 @@ by the user. Trivy was separately requested and added to the spec as AC10.
 
 The user subsequently authorized dependency remediation and PR publication.
 The targeted upgrades are complete on `feat/collaborative-review-panel`.
-Next action: commit/push this branch, create the PR, and check CI/review feedback.
+PR created: https://github.com/dotCMS/openrouter-code-review-action/pull/14
+Next action: monitor PR checks and resolve actionable review feedback.
+
+Initial GitHub push/PR CI runs passed QA/tests and Trivy. The trusted @latest
+self-review action rejected active panel keys before its release supported them.
+The optional defaults are now commented in the shipped config (new code uses the
+same defaults), with a regression test. The trusted action pin is unchanged.
 
 ## Baseline
 
@@ -47,8 +53,8 @@ Outcome: 155 passed in 1.98s. No baseline failures in that subset.
 - `uv sync --dev --locked`: passed after updating only certifi 2026.1.4 →
   2026.10.23, cryptography 46.0.5 → 50.0.2, pyjwt 2.11.0 → 2.15.1, and
   urllib3 2.6.3 → 2.8.0 in uv.lock.
-- `uv run pytest -q`: 870 passed in 9.81s after dependency remediation,
-  including head-change, prior-thread, and live-checkout-symlink safeguards.
+- `uv run pytest -q`: 871 passed in 9.12s after dependency remediation and
+  the trusted-action bootstrap compatibility regression.
 - `uvx --from actionlint-py==1.7.12.25 actionlint -ignore 'unexpected key "queue" for "concurrency" section'`: passed.
 - `git diff --check`: passed.
 - Local Trivy 0.74.0 scan (vuln,misconfig,secret; HIGH,CRITICAL; .venv skipped):
@@ -58,9 +64,9 @@ Outcome: 155 passed in 1.98s. No baseline failures in that subset.
 
 ## Acceptance criteria
 
-AC1–AC10 and the local-validation part of AC11 are verified. The full suite,
-QA, and the configured Trivy gate pass. PR publication/CI verification remains
-in progress. See tests/test_review_coordinator.py,
+AC1–AC10 and AC11 local validation/PR publication are verified. The full suite,
+QA, and the configured Trivy gate pass locally; GitHub QA/Trivy also passed.
+Automated review monitoring continues via `gh pr checks 14`. See tests/test_review_coordinator.py,
 tests/test_review_inspection.py, tests/test_review_workflow.py,
 tests/test_model_config.py, tests/test_dotbot_workflow_model_vars.py,
 tests/test_approval.py, and tests/test_ci_security.py.
