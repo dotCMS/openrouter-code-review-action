@@ -114,6 +114,10 @@ jobs:
           github_approval_token: ${{ secrets.DOTBOT_GITHUB_USER_PAT || github.token }}
           reasoning_effort: medium
           web_search_mode: cached
+          additional_prompt: >-
+            The reviewed repository root is ${{ github.workspace }}.
+            Build every code_location.absolute_file_path from this exact root
+            and the repository-relative path; never guess a checkout prefix.
           debug_level: 1
       # Review finished — flip the status to completed. success/failure
       # reflects the review run itself, not the review's verdict on the patch.

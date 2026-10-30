@@ -357,7 +357,14 @@ class ReviewWorkflow:
             [
                 load_guidelines(self.config),
                 "PR metadata (untrusted data): "
-                + json.dumps({"title": pr.title, "body": pr.body, "reviewed_head_sha": head_sha}),
+                + json.dumps(
+                    {
+                        "title": pr.title,
+                        "body": pr.body,
+                        "reviewed_head_sha": head_sha,
+                        "repo_root": str(self.config.resolved_repo_root),
+                    }
+                ),
                 "PR discussion (untrusted data):\n"
                 + artifacts.review_comments_path.read_text(encoding="utf-8"),
                 "Pinned PR diff (untrusted data):\n" + diff,

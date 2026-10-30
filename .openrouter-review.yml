@@ -17,6 +17,9 @@ review:
   model: deepseek/deepseek-v4-pro-0813
   reasoning_effort: medium       # minimal | low | medium | high
   web_search_mode: live          # disabled | cached | live
+  discussion_rounds: 2           # 1–5
+  decision:
+    policy: unanimous           # unanimous | lead
 
 act:
   model: anthropic/claude-opus-4.7

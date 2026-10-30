@@ -825,6 +825,21 @@ def test_review_action_uses_expected_model_and_drops_legacy_resume_cache() -> No
     )
 
 
+def test_self_review_supplies_the_actual_checkout_root() -> None:
+    workflow = yaml.safe_load(
+        Path(".github/workflows/dotbot-review.yml").read_text(encoding="utf-8")
+    )
+    action_step = next(
+        step
+        for step in workflow["jobs"]["review"]["steps"]
+        if step.get("uses") == "dotCMS/openrouter-code-review-action@latest"
+    )
+    guidance = action_step["with"]["additional_prompt"]
+    assert "${{ github.workspace }}" in guidance
+    assert "code_location.absolute_file_path" in guidance
+    assert "never guess a checkout prefix" in guidance
+
+
 def test_self_hosted_workflows_drive_models_from_org_repo_variables() -> None:
     """Review/act models come from the DOTBOT_* org/repo variables.
 

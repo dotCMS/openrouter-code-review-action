@@ -36,4 +36,5 @@ still dissent, explain the unresolved blocker in overall_explanation.
 - Use the reviewed HEAD (right-side) line numbers, not the merge checkout.
 - Anchor on the exact problematic added or visible context lines, never trailing blanks.
 - Keep ranges minimal and align the start with any code quoted in the finding.
-- Paths must name files in the reviewed repository and ranges must overlap the PR diff.
+- Build `code_location.absolute_file_path` from the exact `repo_root` in PR metadata plus the repository-relative file path. Never guess a checkout prefix or use an action installation directory.
+- Paths must name files in that reviewed repository and ranges must overlap the PR diff.
