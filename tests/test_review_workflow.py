@@ -559,6 +559,7 @@ def test_lead_policy_approval_does_not_claim_unanimity(
     approvals = _patch_approval(monkeypatch)
     workflow.process_review(7)
     assert len(approvals) == 1
+    assert approvals[0]["base_sha"] == "base-sha"
     assert "lead reviewer" in approvals[0]["body"]
     assert "all reviewer models" not in approvals[0]["body"]
 

@@ -60,6 +60,7 @@ class _FakeApprovalPR:
         self._reviews = reviews or []
         self._requester = _FakeRequester()
         self.head = SimpleNamespace(sha="abc123")
+        self.base: SimpleNamespace | None = SimpleNamespace(sha="base123")
 
     def get_reviews(self) -> list[_FakeReview]:
         return list(self._reviews)
@@ -118,6 +119,7 @@ def test_submit_pr_approval_posts_approve_review(monkeypatch: pytest.MonkeyPatch
         repository="owner/repo",
         pr_number=7,
         head_sha="abc123",
+        base_sha="base123",
         token="machine-user-pat",
         body="LGTM",
         debug=debug,
@@ -151,6 +153,7 @@ def test_submit_pr_approval_skips_when_already_approved(monkeypatch: pytest.Monk
         repository="owner/repo",
         pr_number=7,
         head_sha="abc123",
+        base_sha="base123",
         token="machine-user-pat",
         body="LGTM",
         debug=debug,
@@ -184,6 +187,7 @@ def test_submit_pr_approval_submits_when_prior_approval_is_for_older_sha(
         repository="owner/repo",
         pr_number=7,
         head_sha="abc123",
+        base_sha="base123",
         token="machine-user-pat",
         body="LGTM",
         debug=debug,
@@ -207,6 +211,7 @@ def test_submit_pr_approval_wraps_pr_load_failure(monkeypatch: pytest.MonkeyPatc
             repository="owner/repo",
             pr_number=7,
             head_sha="abc123",
+            base_sha="base123",
             token="machine-user-pat",
             body="LGTM",
             debug=debug,
@@ -235,6 +240,7 @@ def test_submit_pr_approval_tolerates_token_that_cannot_read_its_user(
         repository="owner/repo",
         pr_number=7,
         head_sha="abc123",
+        base_sha="base123",
         token="ghs_installation_token",
         body="LGTM",
         debug=debug,
@@ -272,6 +278,7 @@ def test_submit_pr_approval_dedupes_by_body_marker_when_login_unknown(
         repository="owner/repo",
         pr_number=7,
         head_sha="abc123",
+        base_sha="base123",
         token="ghs_installation_token",
         body="LGTM",
         debug=debug,
@@ -308,6 +315,7 @@ def test_submit_pr_approval_ignores_unmarked_approval_when_login_unknown(
         repository="owner/repo",
         pr_number=7,
         head_sha="abc123",
+        base_sha="base123",
         token="ghs_installation_token",
         body="LGTM",
         debug=debug,
@@ -328,12 +336,36 @@ def test_submit_pr_approval_refuses_a_head_that_changed_before_submission(
         repository="owner/repo",
         pr_number=7,
         head_sha="abc123",
+        base_sha="base123",
         token="token",
         body="approval",
         debug=debug,
     )
     assert not outcome.submitted
     assert outcome.reason == "head_changed"
+    assert pr._requester.requests == []
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_submit_pr_approval_refuses_a_changed_or_missing_base(
+    monkeypatch: pytest.MonkeyPatch,
+    missing: bool,
+) -> None:
+    pr = _FakeApprovalPR()
+    pr.base = None if missing else SimpleNamespace(sha="changed-base")
+    _patch_github(monkeypatch, _FakeGithub(repo=_FakeApprovalRepo(pr)))
+    _, debug = _debug_spy()
+    outcome = submit_pr_approval(
+        repository="owner/repo",
+        pr_number=7,
+        head_sha="abc123",
+        base_sha="base123",
+        token="token",
+        body="approval",
+        debug=debug,
+    )
+    assert not outcome.submitted
+    assert outcome.reason == "base_changed"
     assert pr._requester.requests == []
 
 

@@ -175,7 +175,7 @@ def is_reviewable_path(path: Path, repo_root: Path) -> bool:
     return not (
         ".git" in parts
         or name == ".env"
-        or (name.startswith(".env.") and suffix not in {".example", ".sample"})
+        or (name.startswith(".env.") and name not in {".env.example", ".env.sample"})
         or suffix in {".pem", ".key"}
     )
 

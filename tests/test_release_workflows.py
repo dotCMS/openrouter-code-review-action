@@ -15,7 +15,11 @@ Covered:
   existing ``@v1`` consumers are preserved;
 * the release published/edited handler skips non-semver tags (no legacy
   placeholder promotion), only moves refs forward, and does not let editing
-  an older release downgrade ``latest`` (or ``v<major>``).
+  an older release downgrade ``latest`` (or ``v<major>``);
+* it compares against published (non-draft, non-prerelease) releases, so a
+  higher unpublished/orphan tag cannot block promotion;
+* both workflows share the same serializing ``auto-release`` concurrency
+  group with ``cancel-in-progress: false``.
 """
 
 from __future__ import annotations
@@ -224,6 +228,10 @@ def _run_release_script(
     refs: dict[str, str],
     tags: list[str],
     release_tag: str,
+    releases: list[str] | None = None,
+    *,
+    draft: bool = False,
+    prerelease: bool = False,
 ) -> dict[str, Any]:
     if shutil.which("node") is None:
         pytest.skip("node not available")
@@ -231,6 +239,7 @@ def _run_release_script(
     harness = """
 const refs = __REFS__;
 const tags = __TAGS__;
+const releases = __RELEASES__;
 const calls = [];
 let failed = null;
 const core = {
@@ -263,6 +272,9 @@ const github = {
     },
     repos: {
       listTags: async () => ({ data: tags.map((name) => ({ name })) }),
+      listReleases: async () => ({
+        data: releases.map((name) => ({ tag_name: name, draft: false, prerelease: false })),
+      }),
       updateRelease: async (args) => { calls.push(["updateRelease", args.tag_name]); },
     },
   },
@@ -281,7 +293,11 @@ const github = {
 """
     harness = harness.replace("__REFS__", json.dumps(refs))
     harness = harness.replace("__TAGS__", json.dumps(tags))
-    harness = harness.replace("__RELEASE__", json.dumps({"tag_name": release_tag, "id": 1}))
+    harness = harness.replace("__RELEASES__", json.dumps(tags if releases is None else releases))
+    harness = harness.replace(
+        "__RELEASE__",
+        json.dumps({"tag_name": release_tag, "id": 1, "draft": draft, "prerelease": prerelease}),
+    )
     harness = harness.replace("__SCRIPT__", _release_script())
 
     script_path = tmp_path / "release_harness.js"
@@ -339,3 +355,48 @@ def test_release_handler_skips_non_semver_without_placeholder_promotion(tmp_path
     assert not [
         call for call in payload["calls"] if call[0] in {"updateRef", "createRef", "updateRelease"}
     ]
+
+
+def test_release_handler_ignores_unpublished_higher_tag(tmp_path: Path) -> None:
+    # v2.9.0 exists only as an orphan git tag (no published release). It must
+    # not hold back promotion of the published v2.1.0 release.
+    payload = _run_release_script(
+        tmp_path,
+        refs={
+            "v2.1.0": "sha_210",
+            "v2.9.0": "sha_290",
+            "v2": "sha_200",
+            "latest": "sha_200",
+        },
+        tags=["v2.1.0", "v2.9.0"],
+        releases=["v2.1.0"],
+        release_tag="v2.1.0",
+    )
+    assert payload["failed"] is None
+    refs = payload["refs"]
+    assert refs["v2"] == "sha_210"
+    assert refs["latest"] == "sha_210"
+
+
+@pytest.mark.parametrize("flag", ["draft", "prerelease"])
+def test_release_handler_never_promotes_nonstable_release_events(tmp_path: Path, flag: str) -> None:
+    payload = _run_release_script(
+        tmp_path,
+        refs={"v2.0.0": "stable", "v2.1.0": "preview", "v2": "stable", "latest": "stable"},
+        tags=["v2.0.0", "v2.1.0"],
+        releases=["v2.0.0"],
+        release_tag="v2.1.0",
+        draft=flag == "draft",
+        prerelease=flag == "prerelease",
+    )
+    assert payload["failed"] is None
+    assert payload["refs"]["v2"] == "stable"
+    assert payload["refs"]["latest"] == "stable"
+    assert not [call for call in payload["calls"] if call[0] in {"updateRef", "createRef"}]
+
+
+def test_release_workflows_share_serializing_concurrency() -> None:
+    auto = yaml.safe_load(AUTO_WORKFLOW.read_text(encoding="utf-8"))["concurrency"]
+    release = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))["concurrency"]
+    assert auto == {"group": "auto-release", "cancel-in-progress": False}
+    assert release == auto

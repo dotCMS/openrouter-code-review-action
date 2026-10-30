@@ -179,7 +179,17 @@ def test_panel_diff_uses_exact_commits_and_never_runs_external_diff(
 
 @pytest.mark.parametrize(
     "credential_path",
-    [".env", "private.pem", "nested/client.key", ".env.production", ".ENV.local", "PRIVATE.PEM"],
+    [
+        ".env",
+        "private.pem",
+        "nested/client.key",
+        ".env.production",
+        ".ENV.local",
+        "PRIVATE.PEM",
+        ".env.production.example",
+        ".env.production.sample",
+        ".ENV.PRODUCTION.EXAMPLE",
+    ],
 )
 def test_credential_file_changes_require_human_review_before_any_diff_contents(
     reviewed_repo: tuple[Path, str],

@@ -7,6 +7,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
 jobs:
   retag:
     name: Point the moving major tag and latest at the newest release
@@ -18,6 +22,10 @@ jobs:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
+            if (context.payload.release.draft || context.payload.release.prerelease) {
+              core.info('Draft/prerelease releases do not advance stable moving tags.');
+              return;
+            }
             const tag = context.payload.release.tag_name || '';
 
             // Only strict semver tags are managed here. Non-semver tags (for
@@ -47,12 +55,19 @@ jobs:
               return sha;
             }
 
-            // Highest existing semver tag overall and within this major.
-            const all = await github.paginate(github.rest.repos.listTags, { owner, repo, per_page: 100 });
+            // Highest published (non-draft, non-prerelease) semver release
+            // overall and within this major. Unpublished/orphan tags must not
+            // hold back promotion of a published release.
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner,
+              repo,
+              per_page: 100,
+            });
             let maxOverall = null;
             let maxMajor = null;
-            for (const t of all) {
-              const m = /^v(\d+)\.(\d+)\.(\d+)$/.exec(t.name);
+            for (const r of releases) {
+              if (r.draft || r.prerelease) continue;
+              const m = /^v(\d+)\.(\d+)\.(\d+)$/.exec(r.tag_name || '');
               if (!m) continue;
               const v = m.slice(1).map((n) => parseInt(n, 10));
               if (maxOverall === null || compare(v, maxOverall) > 0) maxOverall = v;

@@ -95,6 +95,7 @@ def submit_pr_approval(
     repository: str,
     pr_number: int,
     head_sha: str,
+    base_sha: str,
     token: str,
     body: str,
     debug: Callable[[int, str], None],
@@ -124,6 +125,10 @@ def submit_pr_approval(
     if pr.head.sha != head_sha:
         debug(1, "PR head changed before approval submission; rerun the review")
         return ApprovalOutcome(submitted=False, login=login, reason="head_changed")
+
+    if pr.base is None or pr.base.sha != base_sha:
+        debug(1, "PR base changed before approval submission; rerun the review")
+        return ApprovalOutcome(submitted=False, login=login, reason="base_changed")
 
     try:
         if _approval_exists(pr.get_reviews(), login=login, head_sha=head_sha):

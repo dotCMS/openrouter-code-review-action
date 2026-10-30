@@ -465,7 +465,11 @@ class ReviewWorkflow:
                 pr, prior_comments=snapshots.prior_dotbot_comments, review=review
             )
         self._maybe_approve_pr(
-            pr, result=result, roster=self.config.selected_review_models, head_sha=head_sha
+            pr,
+            result=result,
+            roster=self.config.selected_review_models,
+            head_sha=head_sha,
+            base_sha=base_sha,
         )
         return result
 
@@ -525,6 +529,7 @@ class ReviewWorkflow:
         result: ReviewWorkflowResult,
         roster: tuple[str, ...],
         head_sha: str,
+        base_sha: str,
     ) -> None:
         """Apply the final policy decision; never infer approval from missing results."""
         accepted = result.summary.overall_correctness.strip().casefold() == self._OVERALL_CORRECT
@@ -557,6 +562,7 @@ class ReviewWorkflow:
                 repository=self.config.repository,
                 pr_number=pr.number,
                 head_sha=head_sha,
+                base_sha=base_sha,
                 token=approval_token,
                 body=body,
                 debug=self._debug,
@@ -570,8 +576,8 @@ class ReviewWorkflow:
         elif outcome.reason == "already_approved":
             approver = f" by {outcome.login}" if outcome.login else ""
             print(f"PR #{pr.number} already approved{approver} for {head_sha}")
-        elif outcome.reason == "head_changed":
-            print(f"Skipped PR #{pr.number} approval: head changed; rerun the review")
+        elif outcome.reason in {"head_changed", "base_changed"}:
+            print(f"Skipped PR #{pr.number} approval: base or head changed; rerun the review")
 
     def _refresh_context_artifacts(
         self,
