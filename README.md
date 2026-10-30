@@ -205,6 +205,11 @@ coordinator, whether the roster contains one model or several:
    collapsed; reviewers are instructed to address existing IDs rather than
    introduce paraphrased duplicates.
 
+The Action marks the PR summary **in progress** before input validation or dependency
+installation. Failed/cancelled attempts replace the old verdict with a visible status
+and an attempt-specific run link; successful summaries also identify their run.
+Older runs cannot overwrite a newer run/attempt's status or a different PR head.
+
 Explicit discussion messages are logged when `stream_agent_messages` is enabled;
 raw concurrent model streams are suppressed. A local transcript is saved to
 `.dotbot-context/review-discussion.json`. Known configured credentials are redacted,

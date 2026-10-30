@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -24,7 +25,12 @@ from ..core.github_types import (
 from ..core.models import PriorDotBotReviewComment, ReviewRunResult
 from ..review.anchor_engine import build_anchor_maps
 from ..review.approval import build_approval_body, submit_pr_approval
-from ..review.artifacts import ReviewArtifacts, render_review_summary_metadata
+from ..review.artifacts import (
+    ReviewArtifacts,
+    render_review_run_reference,
+    render_review_summary_metadata,
+    review_run_identity,
+)
 from ..review.context_manager import ReviewContextWriter
 from ..review.coordinator import ReviewCoordinator
 from ..review.dedupe import (
@@ -81,6 +87,7 @@ def _build_review_summary(
 ) -> str:
     summary_lines = [
         SUMMARY_MARKER,
+        render_review_run_reference(reviewed_head_sha),
         render_review_summary_metadata(
             reviewed_head_sha,
             model=model,
@@ -691,7 +698,17 @@ class ReviewWorkflow:
     def _delete_prior_summary(self, pr: PullRequestLikeProtocol) -> list[str]:
         """The consolidated summary supersedes all previous dotbot summaries."""
         warnings: list[str] = []
-        for comment in pr.get_issue_comments():
+        comments = list(pr.get_issue_comments())
+        run_id = os.environ.get("GITHUB_RUN_ID")
+        if run_id:
+            current = (int(run_id), int(os.environ.get("GITHUB_RUN_ATTEMPT", "1")))
+            for comment in comments:
+                if comment.user is None or comment.user.login != "github-actions[bot]":
+                    continue
+                previous = review_run_identity(comment.body or "")
+                if previous is not None and previous > current:
+                    raise ReviewContractError("A newer review run owns the PR summary")
+        for comment in comments:
             if not isinstance(comment.body, str) or SUMMARY_MARKER not in comment.body:
                 continue
             try:

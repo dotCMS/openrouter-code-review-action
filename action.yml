@@ -100,6 +100,16 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Mark review in progress
+      if: inputs.mode == 'review' && inputs.dry_run != '1'
+      uses: actions/github-script@v7
+      env:
+        DOTBOT_ACTION_PATH: ${{ github.action_path }}
+      with:
+        script: |
+          const report = require(`${process.env.DOTBOT_ACTION_PATH}/scripts/review-status.cjs`);
+          await report({ github, context, core, status: 'in_progress' });
+
     - name: Validate inputs
       shell: bash
       run: |
@@ -174,3 +184,15 @@ runs:
         # output is forwarded to the GH Actions log line-by-line.
         PYTHONPATH="${{ github.action_path }}:${PYTHONPATH:-}" \
           python3 -u -m cli.main
+
+    - name: Report unsuccessful review
+      if: always() && inputs.mode == 'review' && inputs.dry_run != '1' && (failure() || cancelled())
+      uses: actions/github-script@v7
+      env:
+        DOTBOT_ACTION_PATH: ${{ github.action_path }}
+        REVIEW_JOB_STATUS: ${{ job.status }}
+      with:
+        script: |
+          const report = require(`${process.env.DOTBOT_ACTION_PATH}/scripts/review-status.cjs`);
+          const status = process.env.REVIEW_JOB_STATUS === 'cancelled' ? 'cancelled' : 'failed';
+          await report({ github, context, core, status });

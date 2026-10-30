@@ -705,6 +705,30 @@ def test_summary_delete_failure_is_reported_without_losing_new_summary(tmp_path:
     assert pr.as_issue().created_comments == ["final summary"]
 
 
+@pytest.mark.parametrize(("run_id", "attempt"), [("101", "1"), ("100", "3")])
+def test_old_success_cannot_delete_or_replace_a_newer_summary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    run_id: str,
+    attempt: str,
+) -> None:
+    monkeypatch.setenv("GITHUB_RUN_ID", "100")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
+    metadata = json.dumps({"run_id": run_id, "attempt": attempt})
+    comment = _FakeIssueComment(
+        f"{SUMMARY_MARKER}\n<!-- dotbot-review-run {metadata} -->\nReview in progress",
+        login="github-actions[bot]",
+    )
+    pr = _FakePR(issue_comments=[comment])
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path), github_client=cast(Any, _FakeGitHubClient(pr))
+    )
+    with pytest.raises(ReviewContractError, match="newer review run"):
+        workflow._publish_summary(cast(Any, pr), "old successful verdict")
+    assert not comment.deleted
+    assert not pr.as_issue().created_comments
+
+
 def test_final_metadata_records_pinned_revision_and_panel() -> None:
     rendered = render_review_summary_metadata("head-sha", model="panel", reasoning_effort="medium")
     payload = json.loads(rendered.removeprefix("<!-- dotbot-review-meta ").removesuffix(" -->"))
