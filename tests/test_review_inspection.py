@@ -169,7 +169,6 @@ def test_panel_diff_uses_exact_commits_and_never_runs_external_diff(
     workflow = ReviewWorkflow(
         ReviewConfig(github_token="token", repository="o/r", repo_root=root),
         github_client=cast(Any, object()),
-        model_client=cast(Any, object()),
     )
     diff = workflow._panel_diff(cast(Any, SimpleNamespace(base=SimpleNamespace(sha=base))), head)
     assert "+reviewed change" in diff

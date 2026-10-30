@@ -10,7 +10,8 @@ import pytest
 from cli.core.config import ReviewConfig
 from cli.core.exceptions import DotBotExecutionError, ReviewContractError
 from cli.core.models import PriorDotBotReviewComment
-from cli.review.coordinator import PANEL_INSTRUCTIONS, PanelTurn, ReviewCoordinator
+from cli.review.coordinator import PanelTurn, ReviewCoordinator
+from cli.review.review_prompt import load_panel_instructions
 
 
 def _config(tmp_path: Path, *, policy: str = "unanimous") -> ReviewConfig:
@@ -353,7 +354,10 @@ def test_duplicates_preserve_highest_severity_and_redact_published_content(
 def test_panel_policy_overrides_nonblocking_verdict_guidance(tmp_path: Path, priority: int) -> None:
     finding = _finding(tmp_path)
     finding["priority"] = priority
-    assert "override the general guidelines' severity-based correctness rule" in PANEL_INSTRUCTIONS
+    assert (
+        "override the general guidelines' severity-based correctness rule"
+        in load_panel_instructions(_config(tmp_path))
+    )
     with pytest.raises(ReviewContractError, match="contradicts retained findings"):
         PanelTurn.parse(_turn(findings=[finding], correct=True), set())
     assert (

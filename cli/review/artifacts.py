@@ -1,7 +1,27 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
+
+
+def render_review_summary_metadata(
+    reviewed_head_sha: str,
+    *,
+    model: str | None = None,
+    reasoning_effort: str | None = None,
+) -> str:
+    payload: dict[str, Any] = {"reviewed_head_sha": reviewed_head_sha}
+    if model is not None:
+        payload["model"] = model
+    if reasoning_effort is not None:
+        payload["reasoning_effort"] = reasoning_effort
+    return (
+        "<!-- dotbot-review-meta "
+        + json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
+        + " -->"
+    )
 
 
 @dataclass(frozen=True)

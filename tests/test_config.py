@@ -106,7 +106,7 @@ def test_from_github_event_ignores_invalid_environment_pr_number(
     assert config.pr_number == 42
 
 
-def test_from_args_requires_openai_api_key_when_provider_is_openai(
+def test_act_requires_openai_api_key_when_provider_is_openai(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
@@ -116,7 +116,19 @@ def test_from_args_requires_openai_api_key_when_provider_is_openai(
             github_token="token",
             repository="owner/repo",
             pr_number=1,
+            mode="act",
             model_provider="openai",
+        )
+
+
+def test_review_rejects_removed_openai_provider() -> None:
+    with pytest.raises(ConfigurationError, match="Review mode requires OpenRouter"):
+        ReviewConfig.from_args(
+            github_token="token",
+            repository="owner/repo",
+            pr_number=1,
+            model_provider="openai",
+            openai_api_key="key",
         )
 
 

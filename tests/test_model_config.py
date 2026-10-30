@@ -18,7 +18,6 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-import yaml
 
 from cli.core.config import ReviewConfig
 from cli.core.exceptions import ConfigurationError
@@ -354,15 +353,6 @@ def test_act_model_generated_config_without_review_block_is_valid(
 
     assert cfg.act_model == "google/gemini-2.5-pro"
     assert cfg.review_model == DEFAULT_REVIEW_MODEL
-
-
-def test_shipped_config_bootstraps_with_the_trusted_pre_panel_action() -> None:
-    # Self-review uses @latest, which cannot consume new keys before this PR is released.
-    config = yaml.safe_load(Path(".openrouter-review.yml").read_text(encoding="utf-8"))
-    assert set(config["review"]) <= {"model", "models", "reasoning_effort", "web_search_mode"}
-    loaded = load_model_config(config_path=".openrouter-review.yml")
-    assert loaded.review_discussion_rounds == 2
-    assert loaded.review_decision_policy == "unanimous"
 
 
 def test_panel_config_defaults_and_file_options(tmp_path: Path, base_env: Path) -> None:

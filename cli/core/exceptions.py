@@ -31,7 +31,3 @@ class PromptError(DotBotReviewError):
 
 class ReviewContractError(DotBotReviewError):
     """Structured review payload or metadata contract violations."""
-
-
-class ReviewResumeError(DotBotReviewError):
-    """Review resume invariant or infrastructure failures."""

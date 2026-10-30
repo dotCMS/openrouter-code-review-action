@@ -11,6 +11,22 @@ when pricing or quality changes.
 - **Act**: applies focused edits when trusted users comment `/dotbot`; commits
   and pushes to the PR branch.
 
+## v2 breaking migration
+
+Review mode now has **one execution path**: the OpenRouter coordinator, including
+single-model rosters. The sequential reviewer, direct OpenAI/Codex review provider,
+session resume, SHA-delta scoping, and review-cache restore/save paths are removed.
+Every run reviews the full pinned PR and reconsiders applicable unresolved comments.
+
+- Use `dotCMS/openrouter-code-review-action@v2` and `OPENROUTER_API_KEY` for review.
+  OpenAI models remain available through their OpenRouter slugs.
+- No opt-in is required: existing model configuration uses the coordinator's
+  defaults (two discussion rounds, unanimous policy). Even one reviewer now uses
+  three passes; account for that model cost when migrating.
+- Pin `@v1` or an exact v1 release to retain the old behavior. Publishing v2 updates
+  only `v2` and `latest`, never `v1`. `@latest` intentionally opts into major changes.
+- The separate act-mode SDK option and Codex evaluation baseline are unaffected.
+
 ## Quick Start (Review)
 
 ```yaml
@@ -30,7 +46,7 @@ jobs:
         with:
           fetch-depth: 0
       - name: OpenRouter autonomous review
-        uses: wezell/openrouter-code-review-action@v1
+        uses: dotCMS/openrouter-code-review-action@v2
         with:
           mode: review
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
@@ -125,7 +141,7 @@ jobs:
       - run: npm ci
 
       - name: dotbot autonomous edits
-        uses: wezell/openrouter-code-review-action@v1
+        uses: dotCMS/openrouter-code-review-action@v2
         with:
           mode: act
           openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}
@@ -174,8 +190,8 @@ and commit. The next run uses the new model.
 ### Collaborative Review Panel
 
 Set `review.models` (a list) — or the additive `review_models` Action input —
-to select additional models alongside `review.model`. With at least two distinct
-models and the default OpenRouter provider, the coordinator:
+to select additional models alongside `review.model`. Every review uses the
+coordinator, whether the roster contains one model or several:
 
 1. Investigates the PR concurrently, with correctness and security review by every model.
 2. Runs `review.discussion_rounds` shared rounds (default 2, allowed 1–5).
@@ -202,12 +218,12 @@ per-model timeouts apply to every pass; two discussion rounds mean three passes
 per model, plus one primary-model pass with `lead`. Provider billing can continue
 briefly for an already-issued request after a timeout.
 
-Panels deliberately start fresh on every run and isolate their saved conversations
-from single-model resume threads. Prior applicable dotbot comments are reconsidered
-through explicit dispositions; prior verdicts never count as current votes.
-Single-model review, the legacy OpenAI provider, and act mode keep their existing
-execution paths. These panel options are configured in the YAML file, not new
-CLI flags or Action inputs.
+Reviews start fresh on every run. Prior applicable dotbot comments are reconsidered
+through explicit dispositions; prior verdicts never count as current votes. There
+is no sequential fallback or review resume/cache path. Panel options are configured
+in the YAML file, not new CLI flags or Action inputs. The steering instructions
+live in [`prompts/review_panel.md`](prompts/review_panel.md), alongside the general
+review guidelines in [`prompts/review.md`](prompts/review.md).
 
 ### Org/Repo Variables (`vars.DOTBOT_*`)
 
@@ -266,25 +282,21 @@ call time; `cached` and `disabled` skip the live web fetch.
 | **Advanced** | | |
 | `extra_pip_args` | Additional pip flags (e.g., `--index-url`) | |
 
-> `openai_api_key` is still accepted for legacy parity but the OpenRouter path
-> is the supported route for all model calls. Migration drops direct vendor
-> SDKs entirely — see `seed.yaml` for the constraint set.
+> `openai_api_key` is only for the optional SDK-backed act mode. Review mode
+> requires OpenRouter and rejects `DOTBOT_PROVIDER=openai`.
 
 ## Agent Loop
 
 OpenRouter chat completions have no built-in agent runtime, so the action ships
-its own tool-calling loop. Every review/edit turn gives the model three tools:
-
-- `read_file` — read a repo file (with optional line ranges)
-- `write_file` — create/overwrite a repo file
-- `run_command` — run a shell command in the repo root (e.g. `git diff`)
+its own tool-calling loop. Reviewers get read-only `read_file`, `list_files`, and
+`search_code` tools against the pinned PR commit. They cannot write files or run
+arbitrary shell commands. Act mode separately exposes `read_file`, `write_file`,
+and `run_command` so it can implement requested edits.
 
 The loop runs until the model produces a final answer, with a 30-iteration cap.
-Sandbox parity with the legacy Codex client is preserved: review and act turns
-run with full access, and any future read-only turn would see the mutating
-tools disabled. Tool results feed back as `role: "tool"` messages, so the
-conversation (including tool traffic) is persisted for resume. Setting
-`DOTBOT_PROVIDER=openai` routes to the legacy Codex SDK client instead.
+Tool results feed back as `role: "tool"` messages. Review conversations may be saved
+for diagnostics, but are never resumed as a new review's verdict. The direct
+`DOTBOT_PROVIDER=openai` SDK option is supported only for act mode.
 
 ## What It Posts
 
@@ -297,21 +309,6 @@ conversation (including tool traffic) is persisted for resume. Setting
   deepseek/deepseek-v4-pro-0813 · medium</sub>`.
 - **Multi-line suggestions** only when contiguous and short; otherwise a
   single-line comment.
-
-## Review Continuation
-
-On repeated single-model `pull_request` review runs, the action continues the prior review
-instead of restarting from scratch.
-
-1. The PR summary stores the previously reviewed head SHA in hidden metadata.
-2. Review mode caches isolated review state keyed by repository, PR number,
-   model, and reviewed SHA.
-3. On the next push, the action restores that cache, resumes the latest stored
-   review thread, and scopes the prompt to the SHA-delta since the previously
-   reviewed SHA.
-4. If the prior SHA is no longer an ancestor (force-push, rebase), the cache
-   is missing, or no thread can be restored, the action falls back to a fresh
-   full review.
 
 ## Deduplication on Repeated Runs
 
@@ -378,26 +375,26 @@ Environment variables of note:
 | `DOTBOT_GITHUB_USER_PAT` | Optional PAT owned by the machine user; enables auto-approval when the final decision policy accepts the patch (see [Automatic PR Approval](#automatic-pr-approval)) |
 | `DOTBOT_MODEL_TIMEOUT_SECONDS` | Per-reviewer-model wall-clock budget in seconds (0 disables) | `900` |
 | `OPENROUTER_API_KEY` | OpenRouter API key (required for the default provider) |
-| `OPENAI_API_KEY` | Legacy provider key (`DOTBOT_PROVIDER=openai`) |
+| `OPENAI_API_KEY` | Optional act-mode SDK key (`DOTBOT_PROVIDER=openai`); not a review provider |
 
 ## Release & Versioning
 
-Releases are cut automatically on every merge to `main`: the `Auto Release on
-Merge` workflow bumps the highest existing `v*` tag by a patch (e.g. `v1.1.0` →
-`v1.1.1`), creates the tag and GitHub Release. After publish, the `Release`
-workflow points the `v1` and `latest` tags at the new release commit, so
-consumers pinning `@v1` always get the latest merged action code.
+Releases are cut on merges to `main`. Conventional Commit `!` markers or a
+`BREAKING CHANGE:` footer bump the major version; ordinary `feat:` bumps the
+minor, otherwise the patch increments. This breaking migration cuts v2.0.0.
 
-Because the `v1`/`latest` moving tags track releases, self-hosted workflow
-files should pin the action to a specific release SHA.
+A release updates only its matching moving major tag and `latest`: v2 releases
+advance `v2`/`latest`, while `v1` consumers remain on v1. Editing an older release
+cannot downgrade those moving tags. Pin an exact release SHA for immutable code,
+a major tag for compatible releases, or `latest` to follow breaking changes.
 
 ## Project Status
 
 This action started as a clone of the GitHub codex-review-action and was
 migrated to route all model calls through [OpenRouter](https://openrouter.ai)
 with a built-in tool-calling agent loop (see [Agent Loop](#agent-loop)). The
-legacy Codex SDK client remains for parity behind `DOTBOT_PROVIDER=openai`, and
-the `eval/` tooling compares new model candidates against a Codex baseline.
+Codex SDK remains only for the separate optional act backend and the `eval/`
+quality baseline. Production review always uses the OpenRouter coordinator.
 
 The evaluation harness scores candidate models for review-quality parity:
 

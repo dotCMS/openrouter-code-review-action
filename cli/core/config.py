@@ -202,6 +202,11 @@ class ReviewConfig:
                 "Must be 'disabled', 'cached', or 'live'"
             )
 
+        if self.mode == "review" and self.model_provider == "openai":
+            raise ConfigurationError(
+                "Review mode requires OpenRouter; pin a v1 release for the old review provider"
+            )
+
         if self.model_provider == "openrouter":
             if not self.openrouter_api_key.strip():
                 raise ConfigurationError(
