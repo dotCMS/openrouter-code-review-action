@@ -86,12 +86,16 @@ def _report(
 
 @pytest.mark.parametrize("status", ["in_progress", "failed", "cancelled"])
 def test_status_replaces_stale_verdict_with_attempt_link(tmp_path: Path, status: str) -> None:
-    result = _report(tmp_path, status=status)
+    result = _report(
+        tmp_path,
+        status=status,
+        prior_run="100" if status != "in_progress" else "99",
+        prior_attempt="2" if status != "in_progress" else "1",
+    )
     assert len(result["mutations"]) == 1
     verb, payload = result["mutations"][0]
-    assert verb == "create"
-    assert payload["issue_number"] == 14
-    assert result["result"] == 10
+    assert verb == ("create" if status == "in_progress" else "update")
+    assert result["result"] == (10 if status == "in_progress" else 7)
     body = payload["body"]
     assert "patch is correct" not in body
     assert "no completed verdict" in body
@@ -118,10 +122,10 @@ def test_obsolete_startup_stops_before_the_cli(tmp_path: Path, obsolete: str) ->
             _report(tmp_path, status="in_progress", head="new-head")
 
 
-def test_legacy_success_summary_is_replaced_on_failure(tmp_path: Path) -> None:
-    body = _report(tmp_path, legacy=True)["mutations"][0][1]["body"]
-    assert "Review failed" in body
-    assert "patch is correct" not in body
+@pytest.mark.parametrize("status", ["failed", "cancelled"])
+def test_cleanup_never_creates_or_repurposes_an_attempt_record(tmp_path: Path, status: str) -> None:
+    assert not _report(tmp_path, status=status, legacy=True)["mutations"]
+    assert not _report(tmp_path, status=status, newer_comment=True)["mutations"]
 
 
 def test_failure_replaces_its_own_attempts_completed_verdict(tmp_path: Path) -> None:
@@ -154,7 +158,7 @@ def test_old_failed_run_updates_only_its_own_comment(tmp_path: Path) -> None:
 
 
 def test_reporter_does_not_edit_human_comments(tmp_path: Path) -> None:
-    result = _report(tmp_path, author="human")
+    result = _report(tmp_path, author="human", status="in_progress")
     assert result["mutations"][0][0] == "create"
 
 

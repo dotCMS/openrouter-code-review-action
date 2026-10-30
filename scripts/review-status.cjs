@@ -44,6 +44,10 @@ module.exports = async function reportReviewStatus({ github, context, core, stat
     }
     if (status === 'in_progress') status = 'cancelled';
   }
+  if (!summary && status !== 'in_progress') {
+    core.warning('No status record exists for this attempt; failure remains visible in workflow checks.');
+    return;
+  }
   const headings = {
     in_progress: '⏳ Review in progress',
     failed: '❌ Review failed',

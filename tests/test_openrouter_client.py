@@ -11,7 +11,12 @@ from cli.clients.model_client import ModelClientProtocol, create_model_client
 from cli.clients.openrouter_client import OpenRouterClient
 from cli.clients.openrouter_thread_store import OpenRouterThreadStore
 from cli.core.config import ReviewConfig
-from cli.core.exceptions import ConfigurationError, DotBotExecutionError, ReviewContractError
+from cli.core.exceptions import (
+    ConfigurationError,
+    CorrectableReviewError,
+    DotBotExecutionError,
+    ReviewContractError,
+)
 
 
 def _config(tmp_path: Path, **overrides: Any) -> ReviewConfig:
@@ -194,7 +199,7 @@ def test_structured_correction_reuses_full_investigation_without_more_tools(tmp_
 
     def validate(output: str) -> None:
         if output != valid:
-            raise ReviewContractError("Expected valid JSON")
+            raise CorrectableReviewError("Expected valid JSON")
 
     result = _client(tmp_path, transport).execute_structured(
         "original full context",
@@ -228,7 +233,7 @@ def test_structured_correction_stops_after_second_invalid_response(tmp_path: Pat
     )
 
     def reject(output: str) -> None:
-        raise ReviewContractError("Still invalid")
+        raise CorrectableReviewError("Still invalid")
 
     with pytest.raises(ReviewContractError, match="Still invalid"):
         _client(tmp_path, transport).execute_structured(
@@ -278,7 +283,7 @@ def test_output_correction_does_not_reset_the_model_timeout(
 
     def reject(output: str) -> None:
         now[0] = 2.0
-        raise ReviewContractError("Invalid JSON")
+        raise CorrectableReviewError("Invalid JSON")
 
     with pytest.raises(DotBotExecutionError, match="timeout reached before output correction"):
         _client(tmp_path, transport, model_timeout_seconds=1).execute_structured(

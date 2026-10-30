@@ -118,10 +118,11 @@ review:
 Unanimous mode preserves all final retained issues and blocks approval on dissent.
 Lead mode adds a primary-reviewer adjudication pass. Both fail closed on an
 incomplete panel, timeout, unrepaired malformed output, or changed PR base/head.
-Invalid structured output gets one correction request with the full original
-conversation/tool results, inside the original timeout and without another
-investigation pass. A second invalid response aborts; contradictory verdict repairs
-must preserve findings and disposition actions. Both prompt files use the same
+A structurally valid but contradictory verdict gets one correction request with the
+full original conversation/tool results, inside the original timeout and without
+another investigation pass. Malformed responses whose decisions cannot be protected
+abort immediately. A second invalid response aborts; verdict repairs must preserve
+findings and disposition actions. Both prompt files use the same
 all-priorities verdict rule. Only the final
 findings and one summary are posted; debate remains in attributed run logs
 (subject to stream settings) and `.dotbot-context/review-discussion.json`.

@@ -45,7 +45,12 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from ..core.config import ReviewConfig, make_debug
-from ..core.exceptions import ConfigurationError, DotBotExecutionError, ReviewContractError
+from ..core.exceptions import (
+    ConfigurationError,
+    CorrectableReviewError,
+    DotBotExecutionError,
+    ReviewContractError,
+)
 from ..core.models import build_openrouter_response_format
 from .openrouter_stream import OpenRouterStreamPrinter, StreamingResult
 from .openrouter_thread_store import OpenRouterThreadStore
@@ -256,7 +261,7 @@ class OpenRouterClient:
             try:
                 output_validator(content)
             except ReviewContractError as exc:
-                if correction:
+                if correction or not isinstance(exc, CorrectableReviewError):
                     self._save_thread(thread_id, messages, model_name=model_name)
                     raise
                 if (

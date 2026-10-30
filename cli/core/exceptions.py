@@ -31,3 +31,7 @@ class PromptError(DotBotReviewError):
 
 class ReviewContractError(DotBotReviewError):
     """Structured review payload or metadata contract violations."""
+
+
+class CorrectableReviewError(ReviewContractError):
+    """A response error whose validated decisions can be preserved during correction."""

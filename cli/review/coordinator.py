@@ -15,7 +15,7 @@ from typing import Any
 
 from ..clients.model_client import ModelClientProtocol
 from ..core.config import ReviewConfig
-from ..core.exceptions import DotBotExecutionError, ReviewContractError
+from ..core.exceptions import CorrectableReviewError, DotBotExecutionError, ReviewContractError
 from ..core.filesystem import write_text_atomic
 from ..core.model_config import validate_panel_options
 from ..core.models import (
@@ -126,7 +126,7 @@ class PanelTurn:
         return turn
 
 
-class _PanelVerdictConflict(ReviewContractError):
+class _PanelVerdictConflict(CorrectableReviewError):
     def __init__(self, turn: PanelTurn) -> None:
         super().__init__("Panel approval contradicts retained findings")
         self.turn = turn
@@ -336,7 +336,11 @@ class ReviewCoordinator:
                 except ReviewContractError as exc:
                     if isinstance(exc, _PanelVerdictConflict) and protected is None:
                         protected = exc.turn
-                    if validations == 1 and self.config.stream_output:
+                    if (
+                        validations == 1
+                        and isinstance(exc, CorrectableReviewError)
+                        and self.config.stream_output
+                    ):
                         print(
                             self._redact(
                                 f"[review-panel-correction] {model} {phase}: one correction requested: {exc}"

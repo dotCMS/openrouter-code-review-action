@@ -391,7 +391,10 @@ def test_contract_failure_diagnostics_do_not_expose_credentials(tmp_path: Path) 
     assert "[REDACTED]" in str(caught.value)
 
 
-@pytest.mark.parametrize("correction", ["valid", "drop-finding", "change-vote", "still-invalid"])
+@pytest.mark.parametrize(
+    "correction",
+    ["valid", "drop-finding", "change-vote", "still-invalid", "masked-conflict", "invalid-json"],
+)
 def test_real_client_repairs_one_turn_without_erasing_findings_or_votes(
     tmp_path: Path,
     correction: str,
@@ -428,6 +431,12 @@ def test_real_client_repairs_one_turn_without_erasing_findings_or_votes(
                     initial_calls[model] += 1
                     if initial_calls[model] == 1 or correction == "still-invalid":
                         text = _turn(findings=[finding], votes=votes, correct=True)
+                        if correction == "masked-conflict":
+                            invalid = json.loads(text)
+                            del invalid["security_summary"]
+                            text = json.dumps(invalid)
+                        elif correction == "invalid-json":
+                            text = "not valid JSON"
                     else:
                         text = _turn(
                             findings=[] if correction == "drop-finding" else [finding],
@@ -461,8 +470,12 @@ def test_real_client_repairs_one_turn_without_erasing_findings_or_votes(
         with pytest.raises(DotBotExecutionError, match="investigation failed for primary"):
             _run(panel, tmp_path, [prior])
         assert not panel.transcript
-        assert initial_calls["primary"] == 2
-    assert capsys.readouterr().out.count("[review-panel-correction]") == 1
+        assert initial_calls["primary"] == (
+            1 if correction in {"masked-conflict", "invalid-json"} else 2
+        )
+    assert capsys.readouterr().out.count("[review-panel-correction]") == (
+        0 if correction in {"masked-conflict", "invalid-json"} else 1
+    )
 
 
 def test_shared_client_is_rejected(tmp_path: Path) -> None:
