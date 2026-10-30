@@ -24,10 +24,12 @@ def _report(
     head: str = "head",
     author: str = "github-actions[bot]",
     legacy: bool = False,
+    newer_comment: bool = False,
 ) -> dict[str, Any]:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is required to execute the action's status reporter")
+    assert node is not None
     previous = json.dumps({"run_id": prior_run, "attempt": prior_attempt, "head_sha": "head"})
     comment = {
         "id": 7,
@@ -38,10 +40,20 @@ def _report(
             else f"dotbot code review:\n<!-- dotbot-review-run {previous} -->\nOverall: patch is correct"
         ),
     }
+    comments = [comment]
+    if newer_comment:
+        newer = json.dumps({"run_id": "101", "attempt": "1", "head_sha": "head"})
+        comments.append(
+            {
+                **comment,
+                "id": 8,
+                "body": f"dotbot code review:\n<!-- dotbot-review-run {newer} -->\nReview in progress",
+            }
+        )
     script = tmp_path / "report.cjs"
     script.write_text(
         "const report = require(" + json.dumps(str(REPORTER)) + ");\n"
-        "const comments = " + json.dumps([comment]) + ";\n"
+        "const comments = " + json.dumps(comments) + ";\n"
         "const mutations = [];\n"
         "const github = {\n"
         " paginate: async () => comments,\n"
@@ -77,8 +89,8 @@ def test_status_replaces_stale_verdict_with_attempt_link(tmp_path: Path, status:
     result = _report(tmp_path, status=status)
     assert len(result["mutations"]) == 1
     verb, payload = result["mutations"][0]
-    assert verb == "update"
-    assert payload["comment_id"] == 7
+    assert verb == "create"
+    assert payload["issue_number"] == 14
     body = payload["body"]
     assert "patch is correct" not in body
     assert "no completed verdict" in body
@@ -104,10 +116,20 @@ def test_failure_replaces_its_own_attempts_completed_verdict(tmp_path: Path) -> 
     body = _report(tmp_path, prior_run="100", prior_attempt="2")["mutations"][0][1]["body"]
     assert "Review failed" in body
     assert "no completed verdict" in body
+    assert _report(tmp_path, prior_run="100", prior_attempt="2")["mutations"][0][0] == "update"
 
 
 def test_cancelled_old_head_cannot_overwrite_current_head_status(tmp_path: Path) -> None:
     assert not _report(tmp_path, status="cancelled", head="new-head")["mutations"]
+
+
+def test_old_failed_run_updates_only_its_own_comment(tmp_path: Path) -> None:
+    result = _report(tmp_path, prior_run="100", prior_attempt="2", newer_comment=True)
+    assert len(result["mutations"]) == 1
+    verb, payload = result["mutations"][0]
+    assert verb == "update"
+    assert payload["comment_id"] == 7
+    assert "Review failed" in payload["body"]
 
 
 def test_reporter_does_not_edit_human_comments(tmp_path: Path) -> None:

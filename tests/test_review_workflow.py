@@ -97,6 +97,9 @@ class _FakeIssueComment:
         self.user = _FakeUser(login)
         self.created_at = "now"
 
+    def edit(self, body: str) -> None:
+        self.body = body
+
     def delete(self) -> None:
         if self.fail_on_delete:
             raise RuntimeError("permission denied")
@@ -465,7 +468,7 @@ def test_panel_publishes_only_final_deduplicated_findings(
 
 
 @pytest.mark.parametrize(
-    "failure", ["invalid-output", "head-changed", "base-changed", "base-missing"]
+    "failure", ["invalid-output", "head-changed", "base-changed", "base-missing", "run-superseded"]
 )
 def test_incomplete_or_stale_panel_cannot_publish_or_approve(
     tmp_path: Path,
@@ -490,6 +493,16 @@ def test_incomplete_or_stale_panel_cannot_publish_or_approve(
         ),
     )
     monkeypatch.setattr(workflow, "_panel_diff", lambda *args: "pinned diff")
+    if failure == "run-superseded":
+        monkeypatch.setenv("GITHUB_RUN_ID", "100")
+        monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+        metadata = json.dumps({"run_id": "101", "attempt": "1"})
+        pr._issue_comments.append(
+            _FakeIssueComment(
+                f"{SUMMARY_MARKER}\n<!-- dotbot-review-run {metadata} -->\nReview in progress",
+                login="github-actions[bot]",
+            )
+        )
     if failure in {"head-changed", "base-changed", "base-missing"}:
         original = github_client.get_pr
 
@@ -726,6 +739,32 @@ def test_old_success_cannot_delete_or_replace_a_newer_summary(
     with pytest.raises(ReviewContractError, match="newer review run"):
         workflow._publish_summary(cast(Any, pr), "old successful verdict")
     assert not comment.deleted
+    assert not pr.as_issue().created_comments
+
+
+def test_action_updates_only_its_own_attempt_summary(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("GITHUB_RUN_ID", "100")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "2")
+    old = _FakeIssueComment(
+        f'{SUMMARY_MARKER}\n<!-- dotbot-review-run {{"run_id":"99","attempt":"1"}} -->\nold verdict',
+        login="github-actions[bot]",
+    )
+    own = _FakeIssueComment(
+        f'{SUMMARY_MARKER}\n<!-- dotbot-review-run {{"run_id":"100","attempt":"2"}} -->\nin progress',
+        comment_id=2,
+        login="github-actions[bot]",
+    )
+    pr = _FakePR(issue_comments=[old, own])
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path), github_client=cast(Any, _FakeGitHubClient(pr))
+    )
+    workflow._publish_summary(cast(Any, pr), "completed current verdict")
+    assert own.body == "completed current verdict"
+    assert "old verdict" in old.body
+    assert not old.deleted and not own.deleted
     assert not pr.as_issue().created_comments
 
 

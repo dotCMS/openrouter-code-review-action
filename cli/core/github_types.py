@@ -61,6 +61,7 @@ class IssueCommentLikeProtocol(Protocol):
     user: UserLikeProtocol | None
 
     def delete(self) -> object: ...
+    def edit(self, body: str) -> object: ...
 
 
 @runtime_checkable

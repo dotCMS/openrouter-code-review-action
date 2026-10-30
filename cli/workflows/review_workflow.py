@@ -94,6 +94,7 @@ def _build_review_summary(
             reasoning_effort=reasoning_effort,
         ),
         f"- Reviewer: {model} ({reasoning_effort})",
+        f"- Reviewed head: `{reviewed_head_sha}`",
         f"- Overall: {summary.overall_correctness.strip() or 'patch is correct'}",
         f"- New findings this run: {summary.current_findings_count}",
         f"- Prior unresolved dotbot findings still relevant: {summary.carried_forward_count}",
@@ -286,6 +287,21 @@ class ReviewWorkflow:
             self._debug(1, "DRY_RUN: would refresh summary issue comment")
             return
 
+        self._assert_summary_ownership(pr)
+        run_id = os.environ.get("GITHUB_RUN_ID")
+        if run_id:
+            current = (int(run_id), int(os.environ.get("GITHUB_RUN_ATTEMPT", "1")))
+            for comment in pr.get_issue_comments():
+                if (
+                    comment.user is not None
+                    and comment.user.login == "github-actions[bot]"
+                    and review_run_identity(comment.body or "") == current
+                ):
+                    comment.edit(summary)
+                    return
+            pr.as_issue().create_comment(summary)
+            return
+
         delete_warnings = self._delete_prior_summary(pr)
         for warning in delete_warnings:
             print(warning, file=sys.stderr)
@@ -366,6 +382,7 @@ class ReviewWorkflow:
             raise ReviewContractError(
                 "PR base or head changed during panel review; rerun before publication/approval"
             )
+        self._assert_summary_ownership(current)
 
     def _process_panel(
         self,
@@ -695,20 +712,22 @@ class ReviewWorkflow:
             remapped_post_result=remapped_post_result,
         )
 
-    def _delete_prior_summary(self, pr: PullRequestLikeProtocol) -> list[str]:
-        """The consolidated summary supersedes all previous dotbot summaries."""
-        warnings: list[str] = []
-        comments = list(pr.get_issue_comments())
+    def _assert_summary_ownership(self, pr: PullRequestLikeProtocol) -> None:
         run_id = os.environ.get("GITHUB_RUN_ID")
         if run_id:
             current = (int(run_id), int(os.environ.get("GITHUB_RUN_ATTEMPT", "1")))
-            for comment in comments:
+            for comment in pr.get_issue_comments():
                 if comment.user is None or comment.user.login != "github-actions[bot]":
                     continue
                 previous = review_run_identity(comment.body or "")
                 if previous is not None and previous > current:
                     raise ReviewContractError("A newer review run owns the PR summary")
-        for comment in comments:
+
+    def _delete_prior_summary(self, pr: PullRequestLikeProtocol) -> list[str]:
+        """The local CLI consolidated summary supersedes previous dotbot summaries."""
+        self._assert_summary_ownership(pr)
+        warnings: list[str] = []
+        for comment in pr.get_issue_comments():
             if not isinstance(comment.body, str) or SUMMARY_MARKER not in comment.body:
                 continue
             try:

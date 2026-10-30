@@ -200,15 +200,16 @@ coordinator, whether the roster contains one model or several:
 3. Applies `review.decision.policy`: `unanimous` preserves final minority findings
    and requires all final positions to approve; `lead` adds an adjudication turn
    by the primary model, which must explain each issue disposition with evidence.
-4. Publishes only final actionable findings and **one consolidated PR summary**.
+4. Publishes only final actionable findings and **one consolidated PR summary per attempt**.
    No intermediate findings or debate are posted. Exact duplicate findings are
    collapsed; reviewers are instructed to address existing IDs rather than
    introduce paraphrased duplicates.
 
-The Action marks the PR summary **in progress** before input validation or dependency
-installation. Failed/cancelled attempts replace the old verdict with a visible status
-and an attempt-specific run link; successful summaries also identify their run.
-Older runs cannot overwrite a newer run/attempt's status or a different PR head.
+The Action creates an **in-progress** summary before validation/install. Each attempt
+updates only its own comment to a final verdict, **failed**, or **cancelled**, with a
+visible run/attempt link. Historical attempt summaries remain as history, rather
+than being reused as the current result. Separate comment ownership prevents an old
+cleanup step from overwriting a newer attempt's status.
 
 Explicit discussion messages are logged when `stream_agent_messages` is enabled;
 raw concurrent model streams are suppressed. A local transcript is saved to
@@ -312,8 +313,9 @@ for diagnostics, but are never resumed as a new review's verdict. The direct
 - **Inline comments** anchored to exact diff lines. If a line isn't in the
   current diff, the finding is filtered or remapped before submission so
   GitHub does not return 422.
-- **PR-level summary** as an issue comment on each run (refreshed on re-runs;
-  prior summaries are deleted). The summary footer records which model and
+- **PR-level summary** as one issue comment per Action attempt, updated as that
+  attempt progresses. Earlier attempts remain identified history. The local CLI
+  refreshes its summary by deleting prior summaries. The summary footer records which model and
   reasoning effort produced the review, e.g. `<sub>reviewed by dotbot ·
   deepseek/deepseek-v4-pro-0813 · medium</sub>`.
 - **Multi-line suggestions** only when contiguous and short; otherwise a

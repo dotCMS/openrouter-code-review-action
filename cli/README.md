@@ -120,9 +120,9 @@ Lead mode adds a primary-reviewer adjudication pass. Both fail closed on an
 incomplete panel, timeout, malformed output, or changed PR base/head. Only the final
 findings and one summary are posted; debate remains in attributed run logs
 (subject to stream settings) and `.dotbot-context/review-discussion.json`.
-The composite Action marks the summary in progress before startup and reports
-failed/cancelled attempts on the PR with an attempt-specific workflow link. It never
-leaves an earlier successful verdict as the current result of a failed rerun.
+The composite Action creates a summary per attempt before startup and updates only
+that comment with the final verdict or failed/cancelled status. Every attempt has
+its own visible workflow link; historical verdicts remain tied to their own runs.
 The local CLI does not run these Action lifecycle steps.
 
 Configured credentials are redacted; other sensitive source information may still

@@ -18,23 +18,26 @@ module.exports = async function reportReviewStatus({ github, context, core, stat
   const comments = await github.paginate(github.rest.issues.listComments, {
     owner, repo, issue_number: pr.number, per_page: 100,
   });
-  const summary = comments.filter((comment) =>
-    comment.user?.login === 'github-actions[bot]' && comment.body?.startsWith(SUMMARY_MARKER)
-  ).at(-1);
-  const line = summary?.body.split('\n')[1] || '';
-  let previous = null;
-  if (line.startsWith(RUN_MARKER) && line.endsWith(' -->')) {
+  let summary = null;
+  let newer = false;
+  for (const comment of comments) {
+    if (comment.user?.login !== 'github-actions[bot]' || !comment.body?.startsWith(SUMMARY_MARKER)) continue;
+    const line = comment.body.split('\n')[1] || '';
+    if (!line.startsWith(RUN_MARKER) || !line.endsWith(' -->')) continue;
+    let previous;
     try {
       previous = JSON.parse(line.slice(RUN_MARKER.length, -4));
     } catch {
       core.warning('Ignoring invalid review-run metadata.');
+      continue;
     }
+    if (!previous || !/^\d+$/.test(previous.run_id) || !/^\d+$/.test(previous.attempt)) continue;
+    if (previous.run_id === run.run_id && previous.attempt === run.attempt) summary = comment;
+    if (BigInt(previous.run_id) > BigInt(run.run_id) ||
+        (previous.run_id === run.run_id && BigInt(previous.attempt) > BigInt(run.attempt))) newer = true;
   }
-  if (previous && /^\d+$/.test(previous.run_id) && /^\d+$/.test(previous.attempt) && (
-    BigInt(previous.run_id) > BigInt(run.run_id) ||
-    (previous.run_id === run.run_id && BigInt(previous.attempt) > BigInt(run.attempt))
-  )) {
-    core.info('A newer review run owns the summary; leaving it untouched.');
+  if (!summary && newer) {
+    core.info('A newer review run exists; not creating an obsolete status comment.');
     return;
   }
   const headings = {
@@ -54,7 +57,7 @@ module.exports = async function reportReviewStatus({ github, context, core, stat
     'No automatic approval is granted by this status.',
     '',
     `Head: \`${run.head_sha}\``,
-    `[Workflow run — attempt ${run.attempt}](${url})`,
+    `[Workflow run ${run.run_id} — attempt ${run.attempt}](${url})`,
   ].join('\n');
   if (summary) {
     await github.rest.issues.updateComment({ owner, repo, comment_id: summary.id, body });

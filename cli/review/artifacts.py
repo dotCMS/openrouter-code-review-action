@@ -34,7 +34,9 @@ def render_review_run_reference(head_sha: str) -> str:
     server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
     metadata = json.dumps({"run_id": run_id, "attempt": attempt, "head_sha": head_sha})
     url = f"{server}/{repository}/actions/runs/{run_id}/attempts/{attempt}"
-    return f"<!-- dotbot-review-run {metadata} -->\n[Workflow run — attempt {attempt}]({url})"
+    return (
+        f"<!-- dotbot-review-run {metadata} -->\n[Workflow run {run_id} — attempt {attempt}]({url})"
+    )
 
 
 def review_run_identity(body: str) -> tuple[int, int] | None:
