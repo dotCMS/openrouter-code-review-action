@@ -398,5 +398,5 @@ def test_release_handler_never_promotes_nonstable_release_events(tmp_path: Path,
 def test_release_workflows_share_serializing_concurrency() -> None:
     auto = yaml.safe_load(AUTO_WORKFLOW.read_text(encoding="utf-8"))["concurrency"]
     release = yaml.safe_load(RELEASE_WORKFLOW.read_text(encoding="utf-8"))["concurrency"]
-    assert auto == {"group": "auto-release", "cancel-in-progress": False}
+    assert auto == {"group": "auto-release", "cancel-in-progress": False, "queue": "max"}
     assert release == auto

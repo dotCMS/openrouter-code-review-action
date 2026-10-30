@@ -409,12 +409,14 @@ def test_panel_publishes_only_final_deduplicated_findings(
     calls: list[str] = []
     pr._issue_comments.append(_FakeIssueComment("Human clarifies the expected behavior."))
     pr._review_comments.append(_FakeReviewComment("Human reviewer explains a caller constraint."))
+    pr._review_comments.append(_FakeReviewComment("inline-private-sentinel", path=".env"))
 
     def respond(prompt: str, kwargs: dict[str, Any]) -> str:
         assert f'"repo_root": "{tmp_path.resolve()}"' in prompt
         assert "PR discussion (untrusted data):" in prompt
         assert "Human clarifies the expected behavior." in prompt
         assert "Human reviewer explains a caller constraint." in prompt
+        assert "inline-private-sentinel" not in prompt
         assert github_client.inline_comments == []
         assert pr.as_issue().created_comments == []
         assert github_client.resolved_thread_ids == []

@@ -589,7 +589,14 @@ class ReviewWorkflow:
             pr,
             artifacts,
             issue_comments=snapshots.issue_comments,
-            review_comments=snapshots.review_comments,
+            review_comments=[
+                comment
+                for comment in snapshots.review_comments
+                if comment.path is not None
+                and is_reviewable_path(
+                    self.config.resolved_repo_root / comment.path, self.config.resolved_repo_root
+                )
+            ],
         )
 
     def _post_results(
