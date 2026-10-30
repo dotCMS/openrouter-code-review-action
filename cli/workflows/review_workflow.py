@@ -310,9 +310,12 @@ class ReviewWorkflow:
     def process_review(self, pr_number: int) -> ReviewWorkflowResult:
         """Collect, deliberate, and publish one final review, even for a single model."""
         pr = self.github_client.get_pr(pr_number)
+        head_sha = self._require_head_sha(pr)
+        expected_head = os.environ.get("DOTBOT_REVIEW_EXPECTED_HEAD_SHA")
+        if expected_head and head_sha != expected_head:
+            raise ReviewContractError("PR head changed after review startup")
         changed_files = list(pr.get_files())
         rename_map = self._build_rename_map(changed_files)
-        head_sha = self._require_head_sha(pr)
         self._debug_changed_files(changed_files)
         artifacts = ReviewArtifacts(
             repo_root=self.config.resolved_repo_root,

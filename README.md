@@ -238,7 +238,7 @@ The correction can incur one extra structured-output completion.
 
 Reviews start fresh on every run. All applicable unresolved dotbot findings enter
 the ledger and receive explicit dispositions; there is no 200-issue truncation.
-An Action attempt is bound to its startup status-comment ID; deletion or corruption
+An Action attempt is bound to its startup head SHA and status-comment ID; deletion or corruption
 of that comment prevents publication and approval. Prior findings are reconsidered
 through explicit dispositions; prior verdicts never count as current votes. There
 is no sequential fallback or review resume/cache path. Panel options are configured
@@ -384,6 +384,10 @@ make lint              # format, lint, type-check
 GITHUB_TOKEN=… OPENROUTER_API_KEY=… PYTHONPATH=. python -m cli.main \
   --repo owner/repo --pr 123 --mode review --dry-run
 ```
+
+The patched certifi, cryptography, PyJWT, and urllib3 minimums are enforced in
+`requirements.txt` as well as the resolved `uv.lock`, so pip upgrades vulnerable
+versions already installed on a runner.
 
 CI also runs a pinned Trivy filesystem scan for vulnerabilities, misconfiguration,
 and secrets, failing on HIGH/CRITICAL findings. It runs independently of lint/tests;

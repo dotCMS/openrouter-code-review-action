@@ -480,6 +480,7 @@ def test_panel_publishes_only_final_deduplicated_findings(
         "base-missing",
         "run-superseded",
         "status-missing",
+        "startup-head-changed",
     ],
 )
 def test_incomplete_or_stale_panel_cannot_publish_or_approve(
@@ -505,6 +506,8 @@ def test_incomplete_or_stale_panel_cannot_publish_or_approve(
         ),
     )
     monkeypatch.setattr(workflow, "_panel_diff", lambda *args: "pinned diff")
+    if failure == "startup-head-changed":
+        monkeypatch.setenv("DOTBOT_REVIEW_EXPECTED_HEAD_SHA", "old-head")
     if failure == "status-missing":
         monkeypatch.setenv("GITHUB_RUN_ID", "100")
         monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")

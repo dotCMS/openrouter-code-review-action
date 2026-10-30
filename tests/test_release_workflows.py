@@ -197,6 +197,39 @@ def test_auto_release_next_version(tmp_path: Path, messages: list[str], expected
     assert f"release create {expected} " in run.gh_log
 
 
+@pytest.mark.parametrize("checkout", ["HEAD", "HEAD^"])
+def test_queued_or_repeated_release_never_retags_an_already_released_commit(
+    tmp_path: Path, checkout: str
+) -> None:
+    run = _run_auto(tmp_path, "v1.2.3", ["fix: newest main commit"])
+    assert run.result.returncode == 0
+    tags_before = _tags(run.repo)
+    _git(run.repo, "checkout", "--detach", checkout)
+    log = tmp_path / "retry-gh.log"
+    env = {
+        **os.environ,
+        "GH_TOKEN": "test",
+        "GITHUB_REPOSITORY": "owner/repo",
+        "GH_REPO_DIR": str(run.repo),
+        "GH_LOG": str(log),
+        "PATH": f"{tmp_path / 'bin'}{os.pathsep}{os.environ.get('PATH', '')}",
+    }
+    result = subprocess.run(
+        ["bash", "-c", _auto_script()],
+        cwd=run.repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert "supersedes this queued push" in result.stdout
+    assert not log.exists()
+    assert _tags(run.repo) == tags_before
+    assert _commit(run.repo, "latest") == run.head_sha
+    assert _commit(run.repo, "v1") == run.head_sha
+
+
 def test_auto_release_breaking_keeps_v1_at_previous_commit(tmp_path: Path) -> None:
     run = _run_auto(
         tmp_path,

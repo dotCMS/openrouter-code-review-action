@@ -186,6 +186,9 @@ def test_action_reports_failures_even_before_cli_and_skips_act_and_dry_run() -> 
         cli["env"]["DOTBOT_REVIEW_STATUS_COMMENT_ID"] == "${{ steps.review_status.outputs.result }}"
     )
     assert "return await report" in start["with"]["script"]
+    assert (
+        cli["env"]["DOTBOT_REVIEW_EXPECTED_HEAD_SHA"] == "${{ github.event.pull_request.head.sha }}"
+    )
     for step in (start, end):
         assert "inputs.mode == 'review'" in step["if"]
         assert "inputs.dry_run != '1'" in step["if"]

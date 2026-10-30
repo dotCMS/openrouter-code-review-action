@@ -34,6 +34,11 @@ jobs:
             echo "No existing version tags; skipping auto-release."
             exit 0
           fi
+          if ! git merge-base --is-ancestor "$latest" HEAD ||
+             [ "$(git rev-parse "$latest^{commit}")" = "$(git rev-parse HEAD)" ]; then
+            echo "A release already supersedes this queued push; skipping."
+            exit 0
+          fi
           log_subjects=$(git log "$latest"..HEAD --pretty=%s)
           log_bodies=$(git log "$latest"..HEAD --pretty=%b)
           is_breaking=false

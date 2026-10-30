@@ -154,6 +154,7 @@ runs:
         # Config
         DOTBOT_MODE: ${{ inputs.mode }}
         DOTBOT_REVIEW_STATUS_COMMENT_ID: ${{ steps.review_status.outputs.result }}
+        DOTBOT_REVIEW_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         DOTBOT_MODEL: ${{ inputs.model }}
         DOTBOT_REVIEW_MODELS: ${{ inputs.review_models }}
         # In-repo model config — single edit swaps the review/act model.

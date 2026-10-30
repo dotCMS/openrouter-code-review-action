@@ -1,6 +1,29 @@
+import tomllib
 from pathlib import Path
 
+import pytest
 import yaml
+
+
+@pytest.mark.parametrize(
+    ("package", "remediated"),
+    [
+        ("certifi", "2026.10.23"),
+        ("cryptography", "50.0.2"),
+        ("pyjwt", "2.15.1"),
+        ("urllib3", "2.8.0"),
+    ],
+)
+def test_action_runtime_rejects_vulnerable_preinstalled_transitive_packages(
+    package: str, remediated: str
+) -> None:
+    runtime = Path("requirements.txt").read_text().casefold().splitlines()
+    locked = {
+        entry["name"]: entry["version"]
+        for entry in tomllib.loads(Path("uv.lock").read_text())["package"]
+    }
+    assert f"{package}>={remediated}" in runtime
+    assert locked[package] == remediated
 
 
 def test_ci_trivy_scan_is_pinned_and_blocks_high_severity_findings() -> None:
