@@ -80,10 +80,12 @@ jobs:
             fi
             next="v${major}.${minor}.${patch}"
             existing=$(git rev-parse -q --verify "refs/tags/${next}^{commit}" || true)
-            if [ -n "$existing" ] && [ "$existing" != "$sha" ]; then
-              echo "ERROR: ${next} already exists at ${existing}, not ${sha}; refusing to overwrite." >&2
-              exit 1
-            fi
+            while [ -n "$existing" ] && [ "$existing" != "$sha" ]; do
+              echo "Preserving reserved ${next} at ${existing}; selecting the next unused patch."
+              patch=$((patch + 1))
+              next="v${major}.${minor}.${patch}"
+              existing=$(git rev-parse -q --verify "refs/tags/${next}^{commit}" || true)
+            done
             if [ -z "$existing" ]; then
               echo "Cutting ${next} (prior ${published}, bump=${bump})"
               git tag -a "$next" -m "dotbot code review ${next}"

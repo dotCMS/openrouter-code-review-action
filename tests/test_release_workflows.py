@@ -324,9 +324,8 @@ def test_auto_release_retry_repairs_aliases_after_publication(
     assert "release create" not in (tmp_path / "repair-gh.log").read_text()
 
 
-def test_auto_release_refuses_to_overwrite_conflicting_tag(tmp_path: Path) -> None:
-    # A v1.0.1 tag pointing somewhere other than HEAD is a real conflict: the
-    # script must fail instead of force-repointing it or publishing a release.
+def test_auto_release_preserves_reserved_tag_and_uses_next_patch(tmp_path: Path) -> None:
+    # Reserved version tags remain immutable, even if they were never published.
     run = _run_auto(
         tmp_path,
         "v1.0.0",
@@ -334,11 +333,45 @@ def test_auto_release_refuses_to_overwrite_conflicting_tag(tmp_path: Path) -> No
         seeded_tags={"v1.0.1": ""},
         published=["v1.0.0"],
     )
-    assert run.result.returncode != 0
-    assert "refusing to overwrite" in run.result.stderr
+    assert run.result.returncode == 0, run.result.stderr
+    assert "Preserving reserved v1.0.1" in run.result.stdout
     assert _commit(run.repo, "v1.0.1") == run.base_sha
-    assert _commit(run.repo, "v1.0.1") != run.head_sha
-    assert "release create" not in run.gh_log
+    assert _commit(run.repo, "v1.0.2") == run.head_sha
+    assert "release create v1.0.2 " in run.gh_log
+
+
+@pytest.mark.parametrize(
+    ("message", "orphan", "next_tag", "major"),
+    [
+        ("fix: failed publication", "v1.0.1", "v1.0.2", "v1"),
+        ("feat!: failed major publication", "v2.0.0", "v2.0.1", "v2"),
+    ],
+)
+def test_new_merge_can_release_after_an_earlier_publication_failed(
+    tmp_path: Path,
+    message: str,
+    orphan: str,
+    next_tag: str,
+    major: str,
+) -> None:
+    run = _run_auto(tmp_path, "v1.0.0", [message], seeded_tags={"v1": ""}, fail_release=orphan)
+    assert run.result.returncode != 0
+    (run.repo / "next.txt").write_text("next merge\n")
+    _git(run.repo, "add", "next.txt")
+    _git(run.repo, "commit", "-q", "-m", "fix: next merge")
+    newest = _commit(run.repo)
+    result = _rerun_auto(run, tmp_path, "newer-release.log")
+    assert result.returncode == 0, result.stderr
+    assert _commit(run.repo, orphan) == run.head_sha
+    assert _commit(run.repo, next_tag) == newest
+    assert _commit(run.repo, "latest") == newest
+    assert _commit(run.repo, major) == newest
+    assert _git(run.repo, "merge-base", "--is-ancestor", run.head_sha, newest).returncode == 0
+    published = json.loads((tmp_path / "releases.json").read_text())
+    assert orphan not in published
+    assert next_tag in published
+    if major == "v2":
+        assert _commit(run.repo, "v1") == run.base_sha
 
 
 def test_auto_release_breaking_keeps_v1_at_previous_commit(tmp_path: Path) -> None:

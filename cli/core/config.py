@@ -290,7 +290,7 @@ class ReviewConfig:
     @property
     def resolved_repo_root(self) -> Path:
         """Return the configured repository root, defaulting to the current directory."""
-        return self.repo_root or Path(".").resolve()
+        return (self.repo_root or Path(".")).resolve()
 
     @property
     def resolved_context_dir_name(self) -> str:

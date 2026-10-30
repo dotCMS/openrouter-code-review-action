@@ -1,9 +1,21 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from cli.core.config import ReviewConfig
 from cli.core.exceptions import ConfigurationError
+
+
+def test_resolved_repo_root_is_absolute_for_relative_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "repo").mkdir()
+    config = ReviewConfig(github_token="token", repository="o/r", repo_root=Path("repo"))
+    assert config.resolved_repo_root == (tmp_path / "repo").resolve()
+    assert config.resolved_repo_root.is_absolute()
 
 
 def test_from_args_rejects_unknown_keys() -> None:

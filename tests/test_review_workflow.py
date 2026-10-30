@@ -577,6 +577,32 @@ def test_panel_dry_run_never_mutates_github(
     assert approvals == []
 
 
+@pytest.mark.parametrize("reason", ["head_changed", "base_changed"])
+def test_approval_snapshot_changes_fail_the_attempt_instead_of_only_logging(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    reason: str,
+) -> None:
+    from cli.review.approval import ApprovalOutcome
+
+    config = _make_config(tmp_path)
+    config.github_approval_token = "machine-token"
+    github = _FakeGitHubClient(_FakePR())
+    workflow = ReviewWorkflow(
+        config,
+        github_client=cast(Any, github),
+        model_client_factory=lambda _: cast(
+            Any, _FakeModelClient(_panel_response(_correct_response()))
+        ),
+    )
+    monkeypatch.setattr(
+        "cli.workflows.review_workflow.submit_pr_approval",
+        lambda **kwargs: ApprovalOutcome(submitted=False, reason=reason),
+    )
+    with pytest.raises(ReviewContractError, match="changed before approval"):
+        workflow.process_review(7)
+
+
 def test_lead_policy_approval_does_not_claim_unanimity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

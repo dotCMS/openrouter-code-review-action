@@ -601,7 +601,7 @@ class ReviewWorkflow:
             approver = f" by {outcome.login}" if outcome.login else ""
             print(f"PR #{pr.number} already approved{approver} for {head_sha}")
         elif outcome.reason in {"head_changed", "base_changed"}:
-            print(f"Skipped PR #{pr.number} approval: base or head changed; rerun the review")
+            raise ReviewContractError("PR base or head changed before approval; rerun the review")
 
     def _refresh_context_artifacts(
         self,
