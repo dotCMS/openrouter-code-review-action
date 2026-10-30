@@ -403,6 +403,21 @@ def test_execute_text_raises_on_parse_errors(monkeypatch: pytest.MonkeyPatch) ->
         client.execute_text("prompt")
 
 
+def test_sdk_client_preserves_optional_output_validation_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = CodexClient(_make_config())
+    monkeypatch.setattr(client, "_run_session", lambda **kwargs: "structured output")
+    validated: list[str] = []
+    assert (
+        client.execute_structured(
+            "prompt", output_schema={"type": "object"}, output_validator=validated.append
+        )
+        == "structured output"
+    )
+    assert validated == ["structured output"]
+
+
 def test_execute_structured_runs_second_turn_with_schema(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

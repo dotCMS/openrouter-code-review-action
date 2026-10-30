@@ -7,6 +7,7 @@ tests can inject fakes without touching provider imports.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Protocol, runtime_checkable
 
 from ..core.config import ReviewConfig
@@ -33,6 +34,7 @@ class ModelClientProtocol(Protocol):
         *,
         output_schema: dict[str, object],
         schema_prompt: str = "Produce the JSON output now.",
+        output_validator: Callable[[str], object] | None = None,
         model_name: str | None = None,
         reasoning_effort: str | None = None,
         suppress_stream: bool = False,

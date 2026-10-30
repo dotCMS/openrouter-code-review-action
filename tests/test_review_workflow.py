@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -240,6 +241,7 @@ class _FakeModelClient:
         output_schema: dict[str, object],
         schema_prompt: str,
         sandbox_mode: str,
+        output_validator: Callable[[str], object] | None = None,
         model_name: str | None = None,
         resume_thread_id: str | None = None,
         suppress_stream: bool = False,
@@ -254,6 +256,8 @@ class _FakeModelClient:
                 "resume_thread_id": resume_thread_id,
             }
         )
+        if output_validator is not None:
+            output_validator(self.response)
         return self.response
 
 

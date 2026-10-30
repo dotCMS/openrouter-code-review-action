@@ -118,11 +118,18 @@ class PanelTurn:
             if item["action"] not in {"retain", "reject"}:
                 raise ReviewContractError("Invalid panel disposition action")
             dispositions[issue_id] = item["action"] == "retain"
+        turn = cls(review, payload["message"], payload["security_summary"], dispositions, payload)
         if (
             review.findings or any(dispositions.values())
         ) and review.overall_correctness == "patch is correct":
-            raise ReviewContractError("Panel approval contradicts retained findings")
-        return cls(review, payload["message"], payload["security_summary"], dispositions, payload)
+            raise _PanelVerdictConflict(turn)
+        return turn
+
+
+class _PanelVerdictConflict(ReviewContractError):
+    def __init__(self, turn: PanelTurn) -> None:
+        super().__init__("Panel approval contradicts retained findings")
+        self.turn = turn
 
 
 @dataclass(frozen=True)
@@ -318,10 +325,36 @@ class ReviewCoordinator:
         completed: queue.Queue[tuple[str, PanelTurn | BaseException]] = queue.Queue()
 
         def worker(model: str) -> None:
+            protected: PanelTurn | None = None
+            validations = 0
+
+            def validate(output: str) -> None:
+                nonlocal protected, validations
+                validations += 1
+                try:
+                    turn = PanelTurn.parse(output, issue_ids)
+                except ReviewContractError as exc:
+                    if isinstance(exc, _PanelVerdictConflict) and protected is None:
+                        protected = exc.turn
+                    if validations == 1 and self.config.stream_output:
+                        print(
+                            self._redact(
+                                f"[review-panel-correction] {model} {phase}: one correction requested: {exc}"
+                            ),
+                            flush=True,
+                        )
+                    raise
+                if protected is not None and (
+                    turn.review.findings != protected.review.findings
+                    or turn.dispositions != protected.dispositions
+                ):
+                    raise ReviewContractError("Correction changed findings or disposition actions")
+
             try:
                 output = self.clients[model].execute_structured(
                     prompt + f"\nYour reviewer identity: {model}",
                     output_schema=_panel_output_schema(issue_ids),
+                    output_validator=validate,
                     schema_prompt="Return the panel JSON now, covering every ledger ID with a reason and code evidence.",
                     model_name=model,
                     suppress_stream=True,

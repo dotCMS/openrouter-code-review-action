@@ -26,8 +26,8 @@ when necessary. In findings return ONLY genuinely new issues, not copies or
 paraphrases of ledger issues. If the ledger already contains duplicates, retain the
 canonical issue and reject redundant IDs with evidence naming that canonical ID.
 To revise an issue, reject its old ID and propose the replacement. Return carried_forward as []: prior comments already have ledger
-IDs and must receive dispositions like other issues. These panel verdict rules
-override the general guidelines' severity-based correctness rule: ANY retained
+IDs and must receive dispositions like other issues. The verdict rule is the same
+as the general guidelines: ANY retained
 or new issue, including P2/P3, requires overall_correctness='patch is incorrect'.
 Only retract an issue when evidence shows it is not actionable, not to gain approval.
 If no issues remain but you

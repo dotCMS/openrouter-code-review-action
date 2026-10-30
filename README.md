@@ -228,6 +228,13 @@ per-model timeouts apply to every pass; two discussion rounds mean three passes
 per model, plus one primary-model pass with `lead`. Provider billing can continue
 briefly for an already-issued request after a timeout.
 
+An invalid structured reviewer response gets **one correction attempt**, reusing
+its full conversation and tool evidence without rerunning investigation. It stays
+inside the original pass timeout and does not add a discussion round. Contradictory
+verdict repairs cannot discard findings or change disposition actions. A second
+invalid response still fails closed; provider/execution errors are not retried.
+The correction can incur one extra structured-output completion.
+
 Reviews start fresh on every run. Prior applicable dotbot comments are reconsidered
 through explicit dispositions; prior verdicts never count as current votes. There
 is no sequential fallback or review resume/cache path. Panel options are configured

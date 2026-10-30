@@ -11,7 +11,7 @@ from cli.core.config import ReviewConfig
 from cli.core.exceptions import DotBotExecutionError, ReviewContractError
 from cli.core.models import PriorDotBotReviewComment
 from cli.review.coordinator import PanelTurn, ReviewCoordinator
-from cli.review.review_prompt import load_panel_instructions
+from cli.review.review_prompt import load_guidelines, load_panel_instructions
 
 
 def _config(tmp_path: Path, *, policy: str = "unanimous") -> ReviewConfig:
@@ -363,6 +363,80 @@ def test_contract_failure_diagnostics_do_not_expose_credentials(tmp_path: Path) 
     assert "[REDACTED]" in str(caught.value)
 
 
+@pytest.mark.parametrize("correction", ["valid", "drop-finding", "change-vote", "still-invalid"])
+def test_real_client_repairs_one_turn_without_erasing_findings_or_votes(
+    tmp_path: Path,
+    correction: str,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from cli.clients.openrouter_client import OpenRouterClient
+    from cli.clients.openrouter_thread_store import OpenRouterThreadStore
+
+    config = _config(tmp_path)
+    schema_calls = {"primary": 0, "secondary": 0}
+    initial_calls = {"primary": 0, "secondary": 0}
+    finding = _finding(tmp_path, title="[P2] Preserve the actionable finding")
+    finding["priority"] = 2
+    prior = PriorDotBotReviewComment(
+        id="prior",
+        thread_id="thread",
+        path="src.py",
+        line=1,
+        body="Prior issue",
+        current_code="authorize(user)",
+        is_currently_applicable=True,
+    )
+
+    def factory(isolated: ReviewConfig) -> Any:
+        model = isolated.review_model
+
+        def transport(payload: dict[str, Any]) -> dict[str, Any]:
+            text = "Investigation complete"
+            if "response_format" in payload:
+                schema_calls[model] += 1
+                prompt = payload["messages"][1]["content"]
+                votes = {item["issue_id"]: True for item in _ledger(prompt)}
+                if "Phase: investigation." in prompt and model == "primary":
+                    initial_calls[model] += 1
+                    if initial_calls[model] == 1 or correction == "still-invalid":
+                        text = _turn(findings=[finding], votes=votes, correct=True)
+                    else:
+                        text = _turn(
+                            findings=[] if correction == "drop-finding" else [finding],
+                            votes={key: False for key in votes}
+                            if correction == "change-vote"
+                            else votes,
+                            correct=False,
+                        )
+                else:
+                    text = _turn(votes=votes)
+            return {
+                "choices": [
+                    {"message": {"role": "assistant", "content": text}, "finish_reason": "stop"}
+                ]
+            }
+
+        return OpenRouterClient(
+            isolated, transport=transport, thread_store=OpenRouterThreadStore(tmp_path / model)
+        )
+
+    panel = ReviewCoordinator(config, factory)
+    if correction == "valid":
+        result = _run(panel, tmp_path, [prior])
+        assert result.overall_correctness == "patch is incorrect"
+        assert len(result.findings) == 1
+        assert result.findings[0].priority == 2
+        assert result.carried_forward_comment_ids == ["prior"]
+        assert len(panel.transcript) == 6
+        assert schema_calls == {"primary": 4, "secondary": 3}
+    else:
+        with pytest.raises(DotBotExecutionError, match="investigation failed for primary"):
+            _run(panel, tmp_path, [prior])
+        assert not panel.transcript
+        assert initial_calls["primary"] == 2
+    assert capsys.readouterr().out.count("[review-panel-correction]") == 1
+
+
 def test_shared_client_is_rejected(tmp_path: Path) -> None:
     client = _Client(lambda prompt, kwargs: _turn())
     with pytest.raises(ReviewContractError, match="isolated model clients"):
@@ -396,10 +470,10 @@ def test_duplicates_preserve_highest_severity_and_redact_published_content(
 def test_panel_policy_overrides_nonblocking_verdict_guidance(tmp_path: Path, priority: int) -> None:
     finding = _finding(tmp_path)
     finding["priority"] = priority
-    assert (
-        "override the general guidelines' severity-based correctness rule"
-        in load_panel_instructions(_config(tmp_path))
-    )
+    config = _config(tmp_path)
+    for guidelines in (load_guidelines(config), load_panel_instructions(config)):
+        assert "including P2/P3" in guidelines
+        assert "at least one P0 or P1" not in guidelines
     with pytest.raises(ReviewContractError, match="contradicts retained findings"):
         PanelTurn.parse(_turn(findings=[finding], correct=True), set())
     assert (
