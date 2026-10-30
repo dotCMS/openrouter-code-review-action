@@ -18,6 +18,9 @@ Covered:
   an older release downgrade ``latest`` (or ``v<major>``);
 * it compares against published (non-draft, non-prerelease) releases, so a
   higher unpublished/orphan tag cannot block promotion;
+* ``auto-release`` uses published stable semver releases as its authoritative
+  baseline, recovers an orphan tag left by a failed ``gh release create`` on
+  rerun, and refuses to overwrite a conflicting version tag;
 * both workflows share the same serializing ``auto-release`` concurrency
   group with ``cancel-in-progress: false``.
 """
@@ -42,6 +45,7 @@ RELEASE_WORKFLOW = ROOT / ".github/workflows/release.yml"
 pytestmark = pytest.mark.skipif(shutil.which("bash") is None, reason="bash not available")
 
 GH_STUB = """#!/usr/bin/env python3
+import json
 import os
 import subprocess
 import sys
@@ -52,7 +56,44 @@ if log:
     with open(log, "a", encoding="utf-8") as fh:
         fh.write(" ".join(args) + "\\n")
 
+
+def _load_releases():
+    path = os.environ.get("GH_RELEASES")
+    if not path or not os.path.exists(path):
+        return []
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _save_releases(releases):
+    path = os.environ.get("GH_RELEASES")
+    if not path:
+        return
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(releases, fh)
+
+
+if args[:2] == ["release", "create"]:
+    tag = args[2]
+    fail_tag = os.environ.get("GH_FAIL_RELEASE", "")
+    consumed = os.environ.get("GH_FAIL_CONSUMED", "")
+    if fail_tag and fail_tag == tag and not (consumed and os.path.exists(consumed)):
+        if consumed:
+            with open(consumed, "w", encoding="utf-8") as fh:
+                fh.write("1")
+        sys.stderr.write("simulated publication failure for " + tag + "\\n")
+        sys.exit(1)
+    releases = _load_releases()
+    if tag not in releases:
+        releases.append(tag)
+        _save_releases(releases)
+    sys.exit(0)
+
 if args and args[0] == "api":
+    if any("/releases" in arg for arg in args):
+        for tag in _load_releases():
+            sys.stdout.write(tag + "\\n")
+        sys.exit(0)
     ref = None
     sha = None
     for arg in args:
@@ -114,6 +155,7 @@ class AutoRun:
     head_sha: str
     result: subprocess.CompletedProcess[str]
     gh_log: str
+    env: dict[str, str]
 
 
 def _run_auto(
@@ -121,6 +163,9 @@ def _run_auto(
     base_tag: str,
     commit_messages: list[str],
     seeded_tags: dict[str, str] | None = None,
+    *,
+    published: list[str] | None = None,
+    fail_release: str | None = None,
 ) -> AutoRun:
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -150,6 +195,10 @@ def _run_auto(
     gh.write_text(GH_STUB, encoding="utf-8")
     gh.chmod(0o755)
     gh_log = tmp_path / "gh.log"
+    releases_path = tmp_path / "releases.json"
+    releases_path.write_text(
+        json.dumps([base_tag] if published is None else published), encoding="utf-8"
+    )
 
     env = dict(os.environ)
     env.update(
@@ -158,6 +207,9 @@ def _run_auto(
             "GITHUB_REPOSITORY": "owner/repo",
             "GH_REPO_DIR": str(repo),
             "GH_LOG": str(gh_log),
+            "GH_RELEASES": str(releases_path),
+            "GH_FAIL_RELEASE": fail_release or "",
+            "GH_FAIL_CONSUMED": str(tmp_path / "fail-consumed"),
         }
     )
     env["PATH"] = f"{bindir}{os.pathsep}{env.get('PATH', '')}"
@@ -175,6 +227,20 @@ def _run_auto(
         head_sha=_commit(repo),
         result=result,
         gh_log=gh_log.read_text(encoding="utf-8") if gh_log.exists() else "",
+        env=env,
+    )
+
+
+def _rerun_auto(run: AutoRun, tmp_path: Path, log_name: str) -> subprocess.CompletedProcess[str]:
+    log = tmp_path / log_name
+    env = {**run.env, "GH_LOG": str(log)}
+    return subprocess.run(  # noqa: S603 - repo-owned workflow script under test
+        ["bash", "-c", _auto_script()],
+        cwd=run.repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
     )
 
 
@@ -206,28 +272,73 @@ def test_queued_or_repeated_release_never_retags_an_already_released_commit(
     tags_before = _tags(run.repo)
     _git(run.repo, "checkout", "--detach", checkout)
     log = tmp_path / "retry-gh.log"
-    env = {
-        **os.environ,
-        "GH_TOKEN": "test",
-        "GITHUB_REPOSITORY": "owner/repo",
-        "GH_REPO_DIR": str(run.repo),
-        "GH_LOG": str(log),
-        "PATH": f"{tmp_path / 'bin'}{os.pathsep}{os.environ.get('PATH', '')}",
-    }
-    result = subprocess.run(
-        ["bash", "-c", _auto_script()],
-        cwd=run.repo,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    result = _rerun_auto(run, tmp_path, "retry-gh.log")
     assert result.returncode == 0, result.stderr
     assert "supersedes this queued push" in result.stdout
-    assert not log.exists()
+    assert "release create" not in log.read_text(encoding="utf-8")
     assert _tags(run.repo) == tags_before
     assert _commit(run.repo, "latest") == run.head_sha
     assert _commit(run.repo, "v1") == run.head_sha
+
+
+def test_auto_release_recovers_orphan_tag_after_failed_publication(tmp_path: Path) -> None:
+    # `gh release create` fails after the tag was pushed. The orphan v1.0.1 tag
+    # must not be mistaken for a published baseline on rerun; instead it is
+    # recovered and published without losing the commit it points at.
+    run = _run_auto(
+        tmp_path,
+        "v1.0.0",
+        ["fix: repair release publication"],
+        published=["v1.0.0"],
+        fail_release="v1.0.1",
+    )
+    assert run.result.returncode != 0
+    assert "v1.0.1" in _tags(run.repo)
+
+    result = _rerun_auto(run, tmp_path, "recover-gh.log")
+    assert result.returncode == 0, result.stderr
+    assert "Recovering unpublished v1.0.1 at HEAD" in result.stdout
+    log = (tmp_path / "recover-gh.log").read_text(encoding="utf-8")
+    assert "release create v1.0.1 " in log
+    assert _commit(run.repo, "v1.0.1") == run.head_sha
+    assert _commit(run.repo, "v1") == run.head_sha
+    assert _commit(run.repo, "latest") == run.head_sha
+    releases = json.loads((tmp_path / "releases.json").read_text(encoding="utf-8"))
+    assert "v1.0.1" in releases
+
+
+@pytest.mark.parametrize("broken", [("latest",), ("v1", "latest")])
+def test_auto_release_retry_repairs_aliases_after_publication(
+    tmp_path: Path, broken: tuple[str, ...]
+) -> None:
+    run = _run_auto(tmp_path, "v1.0.0", ["fix: publish before alias update"])
+    assert run.result.returncode == 0
+    for tag in broken:
+        _git(run.repo, "tag", "-f", tag, run.base_sha)
+    before = _tags(run.repo)
+    result = _rerun_auto(run, tmp_path, "repair-gh.log")
+    assert result.returncode == 0, result.stderr
+    assert _tags(run.repo) == before
+    assert _commit(run.repo, "v1") == run.head_sha
+    assert _commit(run.repo, "latest") == run.head_sha
+    assert "release create" not in (tmp_path / "repair-gh.log").read_text()
+
+
+def test_auto_release_refuses_to_overwrite_conflicting_tag(tmp_path: Path) -> None:
+    # A v1.0.1 tag pointing somewhere other than HEAD is a real conflict: the
+    # script must fail instead of force-repointing it or publishing a release.
+    run = _run_auto(
+        tmp_path,
+        "v1.0.0",
+        ["fix: next patch"],
+        seeded_tags={"v1.0.1": ""},
+        published=["v1.0.0"],
+    )
+    assert run.result.returncode != 0
+    assert "refusing to overwrite" in run.result.stderr
+    assert _commit(run.repo, "v1.0.1") == run.base_sha
+    assert _commit(run.repo, "v1.0.1") != run.head_sha
+    assert "release create" not in run.gh_log
 
 
 def test_auto_release_breaking_keeps_v1_at_previous_commit(tmp_path: Path) -> None:

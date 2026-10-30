@@ -29,57 +29,79 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          latest=$(git tag --list 'v[0-9]*' --sort=-v:refname | head -1 || true)
-          if [ -z "$latest" ]; then
-            echo "No existing version tags; skipping auto-release."
+          # Published stable releases are the authoritative baseline. Deriving it
+          # from git tags is unsafe: a failed `gh release create` leaves an
+          # orphan tag that would otherwise hide every commit since it.
+          # Do not swallow the API call: an auth/network failure must abort,
+          # not silently look like "no releases".
+          releases=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            --jq '.[] | select(.draft == false and .prerelease == false) | .tag_name')
+          published=$(grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' <<< "$releases" | sort -V | tail -1 || true)
+          if [ -z "$published" ]; then
+            echo "No published stable releases; skipping auto-release."
             exit 0
           fi
-          if ! git merge-base --is-ancestor "$latest" HEAD ||
-             [ "$(git rev-parse "$latest^{commit}")" = "$(git rev-parse HEAD)" ]; then
+          published_sha=$(git rev-parse --verify "$published^{commit}")
+          sha=$(git rev-parse HEAD)
+          if ! git merge-base --is-ancestor "$published_sha" "$sha"; then
             echo "A release already supersedes this queued push; skipping."
             exit 0
           fi
-          log_subjects=$(git log "$latest"..HEAD --pretty=%s)
-          log_bodies=$(git log "$latest"..HEAD --pretty=%b)
-          is_breaking=false
-          # Conventional Commits breaking marker: "type(scope)!: ...".
-          if grep -qE '^[a-zA-Z]+(\([^)]*\))?!:' <<< "$log_subjects"; then
-            is_breaking=true
-          fi
-          # "BREAKING CHANGE:"/"BREAKING-CHANGE:" footer in the commit body.
-          if grep -qE '^BREAKING[ -]CHANGE:' <<< "$log_bodies"; then
-            is_breaking=true
-          fi
-          has_feat=$(printf '%s\n' "$log_subjects" | grep -cE '^feat(\([^)]*\))?!?:' || true)
-          major=$(echo "$latest" | sed -E 's/^v([0-9]+).*/\1/')
-          minor=$(echo "$latest" | sed -E 's/^v[0-9]+\.([0-9]+).*/\1/')
-          patch=$(echo "$latest" | sed -E 's/^v[0-9]+\.[0-9]+\.([0-9]+).*/\1/')
-          if [ "$is_breaking" = true ]; then
-            bump='breaking'
-            major=$((major + 1))
-            minor=0
-            patch=0
-          elif [ "$has_feat" -gt 0 ]; then
-            bump='feat'
-            minor=$((minor + 1))
-            patch=0
+          major=$(echo "$published" | sed -E 's/^v([0-9]+).*/\1/')
+          if [ "$published_sha" = "$sha" ]; then
+            echo "A release already supersedes this queued push; repairing moving tags only."
           else
-            bump='patch'
-            patch=$((patch + 1))
+            log_subjects=$(git log "$published"..HEAD --pretty=%s)
+            log_bodies=$(git log "$published"..HEAD --pretty=%b)
+            is_breaking=false
+            # Conventional Commits breaking marker: "type(scope)!: ...".
+            if grep -qE '^[a-zA-Z]+(\([^)]*\))?!:' <<< "$log_subjects"; then
+              is_breaking=true
+            fi
+            # "BREAKING CHANGE:"/"BREAKING-CHANGE:" footer in the commit body.
+            if grep -qE '^BREAKING[ -]CHANGE:' <<< "$log_bodies"; then
+              is_breaking=true
+            fi
+            has_feat=$(printf '%s\n' "$log_subjects" | grep -cE '^feat(\([^)]*\))?!?:' || true)
+            minor=$(echo "$published" | sed -E 's/^v[0-9]+\.([0-9]+).*/\1/')
+            patch=$(echo "$published" | sed -E 's/^v[0-9]+\.[0-9]+\.([0-9]+).*/\1/')
+            if [ "$is_breaking" = true ]; then
+              bump='breaking'
+              major=$((major + 1))
+              minor=0
+              patch=0
+            elif [ "$has_feat" -gt 0 ]; then
+              bump='feat'
+              minor=$((minor + 1))
+              patch=0
+            else
+              bump='patch'
+              patch=$((patch + 1))
+            fi
+            next="v${major}.${minor}.${patch}"
+            existing=$(git rev-parse -q --verify "refs/tags/${next}^{commit}" || true)
+            if [ -n "$existing" ] && [ "$existing" != "$sha" ]; then
+              echo "ERROR: ${next} already exists at ${existing}, not ${sha}; refusing to overwrite." >&2
+              exit 1
+            fi
+            if [ -z "$existing" ]; then
+              echo "Cutting ${next} (prior ${published}, bump=${bump})"
+              git tag -a "$next" -m "dotbot code review ${next}"
+            else
+              echo "Recovering unpublished ${next} at HEAD (prior ${published}, bump=${bump})"
+            fi
+            # Non-force push: an already-pushed orphan is a no-op, any conflicting
+            # remote tag is rejected rather than force-repointed.
+            git push origin "$next"
+            gh release create "$next" \
+              --title "dotbot code review ${next}" \
+              --latest \
+              --notes "Auto-generated release from merge to main."
           fi
-          next="v${major}.${minor}.${patch}"
-          echo "Cutting ${next} (prior ${latest}, bump=${bump})"
-          git tag -a "$next" -m "dotbot code review ${next}"
-          git push origin "$next"
-          gh release create "$next" \
-            --title "dotbot code review ${next}" \
-            --latest \
-            --notes "Auto-generated release from merge to main."
           # Move only this release's major tag and latest. Never repoint v1 at a
           # v2 release (or vice versa), so existing @v1 consumers stay on v1. use
           # updateRef with force (atomic) rather than delete+create to avoid
           # racing the separate release-published retag workflow on the same refs.
-          sha=$(git rev-parse HEAD)
           for t in "v${major}" latest; do
             # PATCH with typed boolean force (capital -F sends JSON true).
             # If the ref doesn't exist yet (first release), fall back to POST.
