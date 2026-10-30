@@ -42,5 +42,6 @@ def test_ci_trivy_scan_is_pinned_and_blocks_high_severity_findings() -> None:
     assert set(scan["with"]["scanners"].split(",")) == {"vuln", "misconfig", "secret"}
     assert scan["with"]["severity"] == "HIGH,CRITICAL"
     assert scan["with"]["exit-code"] == "1"
+    assert scan["env"]["TRIVY_INCLUDE_DEV_DEPS"] == "true"
     assert scan.get("continue-on-error", False) is False
     assert job.get("continue-on-error", False) is False

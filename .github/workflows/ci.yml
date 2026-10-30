@@ -27,6 +27,8 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: '1'
           skip-dirs: .venv
+        env:
+          TRIVY_INCLUDE_DEV_DEPS: 'true'
 
   lint-type-test:
     runs-on: ubuntu-latest

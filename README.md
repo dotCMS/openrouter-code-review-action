@@ -390,7 +390,8 @@ The patched certifi, cryptography, PyJWT, and urllib3 minimums are enforced in
 versions already installed on a runner.
 
 CI also runs a pinned Trivy filesystem scan for vulnerabilities, misconfiguration,
-and secrets, failing on HIGH/CRITICAL findings. It runs independently of lint/tests;
+and secrets, including locked development dependencies, failing on HIGH/CRITICAL
+findings. It runs independently of lint/tests;
 existing dependency advisories must be fixed rather than silently ignored.
 
 Environment variables of note:
