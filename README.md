@@ -68,7 +68,7 @@ per head commit: re-running the workflow on the same SHA will not spam duplicate
 If the input is unset, or the final decision retains findings or rejects the
 patch, the action posts its final review comments without approval. A missing,
 failed, timed-out, or malformed reviewer response prevents panel publication and
-approval under either policy. A changed PR head requires a new review. Approval
+approval under either policy. A changed PR base or head requires a new review. Approval
 submission failures are logged as warnings and never fail the review run.
 
 > The PAT needs `pull-requests: write` scope, and its user must differ from

@@ -349,11 +349,15 @@ class ReviewWorkflow:
         )
         return result.stdout
 
-    def _assert_panel_head(self, pr_number: int, head_sha: str) -> None:
+    def _assert_panel_revision(self, pr_number: int, head_sha: str, base_sha: str) -> None:
         current = self.github_client.get_pr(pr_number)
-        if self._require_head_sha(current) != head_sha:
+        if (
+            self._require_head_sha(current) != head_sha
+            or current.base is None
+            or current.base.sha != base_sha
+        ):
             raise ReviewContractError(
-                "PR head changed during panel review; rerun before publication/approval"
+                "PR base or head changed during panel review; rerun before publication/approval"
             )
 
     def _process_panel(
@@ -373,6 +377,9 @@ class ReviewWorkflow:
                 )
             return source_cache[path]
 
+        if pr.base is None:
+            raise ReviewContractError("Panel review requires the PR base commit")
+        base_sha = pr.base.sha
         diff = self._panel_diff(pr, head_sha)
         snapshots = self._capture_review_snapshots(
             pr,
@@ -402,6 +409,7 @@ class ReviewWorkflow:
                             "title": pr.title,
                             "body": pr.body,
                             "reviewed_head_sha": head_sha,
+                            "reviewed_base_sha": base_sha,
                             "repo_root": str(self.config.resolved_repo_root),
                         }
                     ),
@@ -432,7 +440,7 @@ class ReviewWorkflow:
                 transcript_path=artifacts.base_dir / "review-discussion.json",
                 head_sha=head_sha,
             )
-        self._assert_panel_head(pr.number, head_sha)
+        self._assert_panel_revision(pr.number, head_sha, base_sha)
         posting = self._post_results(review, changed_files, pr, head_sha, rename_map)
         summary = self._build_summary(review)
         text = _build_review_summary(
@@ -447,10 +455,11 @@ class ReviewWorkflow:
             "\n\nParticipants: "
             + ", ".join(self.config.selected_review_models)
             + f"\nDecision policy: {self.config.review_decision_policy}"
+            + f"\nReviewed base: `{base_sha}`"
         )
         self._publish_summary(pr, text)
         result = ReviewWorkflowResult(review, posting, summary)
-        self._assert_panel_head(pr.number, head_sha)
+        self._assert_panel_revision(pr.number, head_sha, base_sha)
         if diff is not None:
             self._resolve_stale_prior_threads(
                 pr, prior_comments=snapshots.prior_dotbot_comments, review=review

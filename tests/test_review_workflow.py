@@ -128,7 +128,7 @@ class _FakePR:
         self.url = "https://api.example.test/repos/owner/repo/pulls/7"
         self.user = _FakeUser()
         self.head: _FakeHead | None = _FakeHead()
-        self.base = _FakeBase()
+        self.base: _FakeBase | None = _FakeBase()
         self._issue_comments = issue_comments or []
         self._review_comments = review_comments or []
         self._review_threads = review_threads or [
@@ -462,7 +462,9 @@ def test_panel_publishes_only_final_deduplicated_findings(
     assert "private debate contribution" not in pr.as_issue().created_comments[0]
 
 
-@pytest.mark.parametrize("failure", ["invalid-output", "head-changed"])
+@pytest.mark.parametrize(
+    "failure", ["invalid-output", "head-changed", "base-changed", "base-missing"]
+)
 def test_incomplete_or_stale_panel_cannot_publish_or_approve(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -486,13 +488,16 @@ def test_incomplete_or_stale_panel_cannot_publish_or_approve(
         ),
     )
     monkeypatch.setattr(workflow, "_panel_diff", lambda *args: "pinned diff")
-    if failure == "head-changed":
+    if failure in {"head-changed", "base-changed", "base-missing"}:
         original = github_client.get_pr
 
         def changed(number: int) -> _FakePR:
             result = original(number)
             if len(github_client.calls) > 1:
-                result.head = _FakeHead(sha="new-head")
+                if failure == "head-changed":
+                    result.head = _FakeHead(sha="new-head")
+                else:
+                    result.base = _FakeBase(sha="new-base") if failure == "base-changed" else None
             return result
 
         monkeypatch.setattr(github_client, "get_pr", changed)

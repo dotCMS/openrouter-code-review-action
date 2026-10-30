@@ -266,6 +266,49 @@ def test_pinned_reads_treat_filename_pathspec_syntax_literally(
     assert read_file_at_revision(root, revision, name) == "literal path content\n"
 
 
+def _commit_credential_and_ordinary_matches(root: Path, directory: str) -> str:
+    def git(*args: str) -> str:
+        return subprocess.run(
+            ["git", *args], cwd=root, capture_output=True, text=True, check=True
+        ).stdout.strip()
+
+    credential_dir = root / directory
+    credential_dir.mkdir()
+    (credential_dir / ".env").write_text("TOKEN=denied-env-secret\n")
+    (credential_dir / "private.pem").write_text("TOKEN=denied-pem-secret\n")
+    (root / "src").mkdir()
+    (root / "src" / "app.py").write_text("TOKEN=ordinary\n")
+    (root / ".env.example").write_text("TOKEN=example\n")
+    (root / "docs:readme.txt").write_text("TOKEN=colon-ok\n")
+    (root / "nl\nfile.txt").write_text("TOKEN=newline-ok\n")
+    git("add", ".")
+    git("commit", "-m", "Add credential and ordinary matches")
+    return git("rev-parse", "HEAD")
+
+
+@pytest.mark.parametrize("directory", ["safe:dir", "safe\ndir"])
+def test_pinned_search_denies_credentials_under_colon_and_newline_parents(
+    reviewed_repo: tuple[Path, str],
+    directory: str,
+) -> None:
+    root, _ = reviewed_repo
+    revision = _commit_credential_and_ordinary_matches(root, directory)
+    output = execute_tool(
+        "search_code",
+        json.dumps({"text": "TOKEN"}),
+        repo_root=root,
+        sandbox_mode="read-only",
+        revision=revision,
+    )
+    assert "denied-env-secret" not in output
+    assert "denied-pem-secret" not in output
+    assert "should-not-be-readable" not in output
+    assert "src/app.py:1:TOKEN=ordinary" in output
+    assert ".env.example:1:TOKEN=example" in output
+    assert "docs:readme.txt:1:TOKEN=colon-ok" in output
+    assert "nl\nfile.txt:1:TOKEN=newline-ok" in output
+
+
 def test_prior_comment_applicability_uses_reviewed_commit_not_checkout(
     reviewed_repo: tuple[Path, str],
 ) -> None:

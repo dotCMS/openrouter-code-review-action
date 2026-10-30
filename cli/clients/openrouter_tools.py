@@ -180,6 +180,39 @@ def is_reviewable_path(path: Path, repo_root: Path) -> bool:
     )
 
 
+def _render_pinned_search_matches(stdout: bytes, *, revision: str, repo_root: Path) -> str:
+    """Filter complete NUL-delimited filenames before rendering any matched text."""
+    root = repo_root.resolve()
+    prefix = revision.encode("utf-8", errors="replace")
+    rendered: list[str] = []
+    pos = 0
+    while pos < len(stdout):
+        path_end = stdout.find(b"\0", pos)
+        if path_end < 0:
+            raise ValueError("Invalid pinned search filename field")
+        head = stdout[pos:path_end]
+        if (
+            head[: len(prefix)].lower() != prefix.lower()
+            or head[len(prefix) : len(prefix) + 1] != b":"
+        ):
+            raise ValueError("Invalid pinned search revision prefix")
+        path = head[len(prefix) + 1 :].decode("utf-8", errors="replace")
+        line_start = path_end + 1
+        line_end = stdout.find(b"\0", line_start)
+        if line_end < 0 or not stdout[line_start:line_end].isdigit():
+            raise ValueError("Invalid pinned search line field")
+        lineno = stdout[line_start:line_end].decode("ascii")
+        content_start = line_end + 1
+        content_end = stdout.find(b"\n", content_start)
+        if content_end < 0:
+            content_end = len(stdout)
+        content = stdout[content_start:content_end].decode("utf-8", errors="replace")
+        pos = content_end + 1
+        if is_reviewable_path(root / path, root):
+            rendered.append(f"{path}:{lineno}:{content}")
+    return "\n".join(rendered)
+
+
 def _pinned_blob_at(repo_root: Path, revision: str, relative: str) -> bool:
     """Probe the pinned tree so failed reads cannot masquerade as missing paths."""
     tree = subprocess.run(
@@ -259,7 +292,7 @@ def _tool_inspect_revision(
             text = arguments.get("text")
             if not isinstance(text, str) or not text.strip():
                 return "error: search_code requires non-empty literal text"
-            args = ["grep", "-n", "-F", "--no-textconv", "-e", text, revision, "--"]
+            args = ["grep", "-I", "-n", "-z", "-F", "--no-textconv", "-e", text, revision, "--"]
         result = subprocess.run(
             ["git", "--no-pager", *args],
             cwd=repo_root,
@@ -269,19 +302,15 @@ def _tool_inspect_revision(
         )
         if result.returncode not in ({0, 1} if name == "search_code" else {0}):
             return "error: could not inspect reviewed commit"
-        content = result.stdout.decode("utf-8", errors="replace")
         if name == "list_files":
             content = "\n".join(
                 p
-                for p in content.split("\0")
+                for p in result.stdout.decode("utf-8", errors="replace").split("\0")
                 if p and is_reviewable_path(repo_root.resolve() / p, repo_root)
             )
         else:
-            content = content.replace(f"{revision}:", "")
-            content = "\n".join(
-                line
-                for line in content.splitlines()
-                if is_reviewable_path(repo_root.resolve() / line.split(":", 1)[0], repo_root)
+            content = _render_pinned_search_matches(
+                result.stdout, revision=revision, repo_root=repo_root
             )
         return (
             content[:MAX_TOOL_OUTPUT_CHARS] + "\n... (truncated)"

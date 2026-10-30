@@ -117,7 +117,7 @@ review:
 
 Unanimous mode preserves all final retained issues and blocks approval on dissent.
 Lead mode adds a primary-reviewer adjudication pass. Both fail closed on an
-incomplete panel, timeout, malformed output, or changed PR head. Only the final
+incomplete panel, timeout, malformed output, or changed PR base/head. Only the final
 findings and one summary are posted; debate remains in attributed run logs
 (subject to stream settings) and `.dotbot-context/review-discussion.json`.
 Configured credentials are redacted; other sensitive source information may still
