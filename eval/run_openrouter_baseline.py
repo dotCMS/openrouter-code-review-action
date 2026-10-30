@@ -76,6 +76,11 @@ SAMPLE_PATH = REPO_ROOT / "eval" / "sample-prs.yaml"
 RUNS_DIR = REPO_ROOT / "eval" / "runs"
 RUNNER_VERSION = "1"
 
+# Canonical stdout markers emitted by ``cli.main``. Panel turns stream under
+# ``[review-panel]`` and are intermediate; only ``[review-result]`` carries
+# the consolidated final ``ReviewRunResult``.
+RESULT_MARKER = "[review-result]"
+
 # Defaults read from the in-repo model config file when present, but
 # the script must be runnable on any checkout (e.g. before the config
 # is materialized in CI), so we keep defensive constants here too.
@@ -304,32 +309,41 @@ def _live_env_ok() -> tuple[bool, str]:
     return True, ""
 
 
-def _checkout_pr(pr: SamplePR, dest: Path) -> None:
+def _checkout_pr(pr: SamplePR, dest: Path, *, repo_url: str | None = None) -> None:
     """Clone ``pr.repo`` and check out the pinned ``head_sha`` at ``dest``.
 
-    Shallow single-commit fetch when the server allows it; falls back
-    to a full ``fetch origin`` otherwise. Mirrors the codex baseline
-    runner's checkout to keep the two harnesses interchangeable.
+    Fetches full history (no ``--depth``) for every branch tip plus the
+    pinned head, so the PR base commit and its merge base are present.
+    The production panel runs ``git diff <base>...<head>`` in this
+    checkout and fails closed when either commit is missing; a depth-1
+    head-only fetch omits both the base and the merge base.
+
+    ``repo_url`` overrides the GitHub URL so tests can point at a local
+    bare repository instead of the network.
     """
     dest.mkdir(parents=True, exist_ok=True)
-    repo_url = f"https://github.com/{pr.repo}.git"
+    remote = repo_url or f"https://github.com/{pr.repo}.git"
     subprocess.run(["git", "init", str(dest)], check=True, capture_output=True)
     subprocess.run(
-        ["git", "-C", str(dest), "remote", "add", "origin", repo_url],
+        ["git", "-C", str(dest), "remote", "add", "origin", remote],
         check=True,
         capture_output=True,
     )
-    fetch = subprocess.run(
-        ["git", "-C", str(dest), "fetch", "--depth", "1", "origin", pr.head_sha],
+    # Full fetch of every branch tip (including the PR base branch) with
+    # complete history so ``git diff base...head`` can resolve the merge base.
+    subprocess.run(
+        ["git", "-C", str(dest), "fetch", "--no-tags", "origin"],
+        check=True,
         capture_output=True,
     )
-    if fetch.returncode != 0:
-        # Server refused single-SHA fetch — fall back to full fetch.
-        subprocess.run(
-            ["git", "-C", str(dest), "fetch", "origin"],
-            check=True,
-            capture_output=True,
-        )
+    # The pinned head may be unreachable from any branch (unmerged PR), so
+    # fetch it explicitly, also with full history. A server that refuses
+    # single-SHA fetches still leaves the branch fetch above in place.
+    subprocess.run(
+        ["git", "-C", str(dest), "fetch", "--no-tags", "origin", pr.head_sha],
+        check=False,
+        capture_output=True,
+    )
     subprocess.run(
         ["git", "-C", str(dest), "checkout", "--detach", pr.head_sha],
         check=True,
@@ -347,10 +361,10 @@ def _invoke_review_cli(
 ) -> dict[str, Any]:
     """Run ``cli.main --mode review --dry-run`` against ``repo_path``.
 
-    The CLI prints the structured ``ReviewRunResult`` JSON to stdout in
-    ``--dry-run`` mode (it skips posting but still parses + emits the
-    payload). We capture stdout, locate the JSON envelope amongst the
-    diagnostic chatter, and return it as a dict.
+    The CLI streams intermediate ``[review-panel]`` turns and then prints
+    the consolidated ``[review-result] <ReviewRunResult JSON>`` line on
+    stdout in ``--dry-run`` mode (it skips posting but still emits the
+    final payload). We capture stdout and anchor on that final marker.
 
     OpenRouter routing: the action reads ``OPENROUTER_API_KEY`` from
     env, so we just inherit the parent process env (which the live-env
@@ -379,8 +393,14 @@ def _invoke_review_cli(
         "1",
     ]
     env = dict(os.environ)
+    # Anchor the import to the trusted action source, never the PR checkout:
+    # without PYTHONSAFEPATH, ``python -m`` would prefer a ``cli/`` package
+    # present in the checked-out PR. Mirrors action.yml's hardening.
     pythonpath = env.get("PYTHONPATH", "")
     env["PYTHONPATH"] = str(REPO_ROOT) + (os.pathsep + pythonpath if pythonpath else "")
+    env["PYTHONSAFEPATH"] = "1"
+    env["DOTBOT_REVIEW_EXPECTED_HEAD_SHA"] = pr.head_sha
+    env.pop("DOTBOT_REVIEW_STATUS_COMMENT_ID", None)
     proc = subprocess.run(
         cmd,
         cwd=str(REPO_ROOT),
@@ -398,33 +418,22 @@ def _invoke_review_cli(
 
 
 def _extract_review_run_result(stdout: str) -> dict[str, Any]:
-    """Parse a ``ReviewRunResult`` JSON envelope from CLI stdout.
-
-    Same scanner contract as the codex baseline runner: walk the stream
-    for the first balanced JSON object that carries the required
-    ``findings`` / ``carried_forward`` / ``overall_correctness`` keys.
-    Accepts arbitrary surrounding diagnostic lines.
-    """
-    decoder = json.JSONDecoder()
-    idx = 0
-    while True:
-        next_brace = stdout.find("{", idx)
-        if next_brace == -1:
-            break
-        try:
-            obj, end = decoder.raw_decode(stdout, next_brace)
-        except json.JSONDecodeError:
-            idx = next_brace + 1
+    """Read only the final tagged aggregate, never a discussion turn or preview."""
+    for line in reversed(stdout.splitlines()):
+        line = line.lstrip()
+        if not line.startswith(RESULT_MARKER):
             continue
+        try:
+            payload = json.loads(line[len(RESULT_MARKER) :])
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"malformed JSON after {RESULT_MARKER} marker") from exc
         if (
-            isinstance(obj, dict)
-            and "findings" in obj
-            and "carried_forward" in obj
-            and "overall_correctness" in obj
+            not isinstance(payload, dict)
+            or not {"findings", "carried_forward", "overall_correctness"} <= payload.keys()
         ):
-            return obj
-        idx = end
-    raise RuntimeError("could not locate a ReviewRunResult JSON envelope in CLI stdout")
+            raise RuntimeError(f"{RESULT_MARKER} marker is not followed by a ReviewRunResult")
+        return payload
+    raise RuntimeError(f"review output is missing the final {RESULT_MARKER} marker")
 
 
 def capture_one(

@@ -1,20 +1,24 @@
 """Smoke tests for the Codex baseline runner (Sub-AC 1.2).
 
 These tests pin the artifact contract: shape of the per-PR JSON
-envelope, idempotency of placeholder writes, and correct handling of
-selection by ``--pr-id``. They do NOT exercise the live Codex CLI —
-that requires real API access and is covered by the bake-off run
-itself, not by the unit suite.
+envelope, idempotency of placeholder writes, correct handling of
+selection by ``--pr-id``, and the read-only SDK capture seam. They
+stub the existing ``CodexClient`` and never make a live model call.
 """
 
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import pytest
 import yaml
+
+from cli.core.models import REVIEW_OUTPUT_SCHEMA
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -132,9 +136,9 @@ def test_dry_run_only_writes_pending_placeholder_for_every_pr(isolated_runs):
 
 
 def test_pending_placeholder_when_live_env_missing(isolated_runs):
-    # Without OPENAI_API_KEY / GITHUB_TOKEN / codex module the runner
-    # MUST fall back to writing a pending placeholder rather than
-    # silently skipping or writing fabricated findings.
+    # Without OPENAI_API_KEY / codex module the runner MUST fall back
+    # to writing a pending placeholder rather than silently skipping or
+    # writing fabricated findings.
     rc = runner.main(["--all"])
     assert rc == 0
     artifact = _read_artifact("fixture-pr-1")
@@ -209,57 +213,171 @@ def test_unknown_pr_id_errors(isolated_runs):
 
 
 # ---------------------------------------------------------------------------
-# Tests — review-run-result extractor (the live-capture parser)
+# Tests — live SDK capture (stubbed CodexClient, no model calls)
 # ---------------------------------------------------------------------------
 
 
-def test_extract_review_run_result_from_mixed_stdout():
-    # The Codex CLI prints diagnostic lines plus a JSON envelope; the
-    # extractor must locate the JSON among the noise.
-    payload = {
+def _sdk_result() -> dict[str, Any]:
+    return {
         "findings": [],
         "carried_forward": [],
         "overall_correctness": "patch is correct",
         "overall_explanation": "no issues found",
         "overall_confidence_score": 0.9,
     }
-    stdout = (
-        "Loading config…\n"
-        "Calling Codex…\n"
-        f"{json.dumps(payload)}\n"
-        "Review completed: patch is correct, 0 findings\n"
+
+
+class _FakeCodexClient:
+    last_config: Any = None
+    last_call: dict[str, Any] = {}
+
+    def __init__(self, config: Any) -> None:
+        _FakeCodexClient.last_config = config
+
+    def execute_structured(self, prompt: str, **kwargs: Any) -> str:
+        _FakeCodexClient.last_call = {"prompt": prompt, **kwargs}
+        return json.dumps(_sdk_result())
+
+
+def _fixture_pr() -> runner.SamplePR:
+    return runner.SamplePR(
+        id="fixture-pr-1",
+        repo="owner/repo",
+        pr=1,
+        head_sha="deadbeef" * 5,
+        web_search_mode="disabled",
+        reasoning_effort="medium",
     )
-    out = runner._extract_review_run_result(stdout)
-    assert out == payload
 
 
-def test_extract_review_run_result_skips_unrelated_braces():
-    # First {…} is a metadata blob, NOT the review envelope. The
-    # extractor must keep scanning until it finds the envelope keys.
-    decoy = json.dumps({"unrelated": "data", "items": [1, 2, 3]})
-    payload = {
-        "findings": [
-            {
-                "title": "[P2] x",
-                "body": "y",
-                "confidence_score": 0.5,
-                "priority": 2,
-                "code_location": {
-                    "absolute_file_path": "foo.py",
-                    "line_range": {"start": 1, "end": 1},
-                },
-            }
-        ],
-        "carried_forward": [],
-        "overall_correctness": "patch needs changes",
-        "overall_explanation": "see findings",
-        "overall_confidence_score": 0.7,
-    }
-    stdout = f"banner\n{decoy}\n--- review ---\n{json.dumps(payload)}\n"
-    out = runner._extract_review_run_result(stdout)
-    assert out == payload
+def test_invoke_codex_sdk_uses_read_only_structured_review(monkeypatch, tmp_path):
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.setattr("cli.clients.codex_client.CodexClient", _FakeCodexClient)
+    monkeypatch.setattr(
+        "cli.clients.github_client.GitHubClient",
+        lambda _: SimpleNamespace(
+            get_pr=lambda n: SimpleNamespace(
+                head=SimpleNamespace(sha="deadbeef" * 5), base=SimpleNamespace(sha="b" * 40)
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        runner.subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=0)
+    )
+
+    pr = _fixture_pr()
+    out = runner._invoke_codex_sdk(pr, checkout)
+
+    assert out == _sdk_result()
+    assert _FakeCodexClient.last_call["sandbox_mode"] == "read-only"
+    assert _FakeCodexClient.last_call["output_schema"] is REVIEW_OUTPUT_SCHEMA
+    prompt = _FakeCodexClient.last_call["prompt"]
+    assert "<repository>owner/repo</repository>" in prompt
+    assert pr.head_sha in prompt
+    assert "Review guidelines:" in prompt
+    assert f"<base_sha>{'b' * 40}</base_sha>" in prompt
+    assert f"git diff {'b' * 40}...{pr.head_sha}" in prompt
+    assert _FakeCodexClient.last_config.mode == "review"
+    assert _FakeCodexClient.last_config.openai_api_key == "test-key"
 
 
-def test_extract_review_run_result_raises_when_no_envelope():
-    with pytest.raises(RuntimeError):
-        runner._extract_review_run_result('no review here\n{"unrelated": "data"}\n')
+@pytest.mark.parametrize(
+    ("head", "base"), [(None, "b" * 40), ("different-head", "b" * 40), ("deadbeef" * 5, None)]
+)
+def test_sdk_capture_rejects_missing_or_changed_revision_before_execution(
+    monkeypatch, tmp_path, head, base
+):
+    monkeypatch.setattr(
+        "cli.clients.github_client.GitHubClient",
+        lambda _: SimpleNamespace(
+            get_pr=lambda n: SimpleNamespace(
+                head=SimpleNamespace(sha=head) if head else None,
+                base=SimpleNamespace(sha=base) if base else None,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "cli.clients.codex_client.CodexClient",
+        lambda _: pytest.fail("must not execute an unpinned benchmark"),
+    )
+    with pytest.raises(RuntimeError, match="Benchmark PR"):
+        runner._invoke_codex_sdk(_fixture_pr(), tmp_path)
+
+
+def test_live_capture_writes_review_run_result(isolated_runs, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setenv("GITHUB_TOKEN", "test-token")
+    monkeypatch.setattr(runner, "_have_codex_module", lambda: True)
+    monkeypatch.setattr(
+        runner, "_checkout_pr", lambda pr, dest, **kw: dest.mkdir(parents=True, exist_ok=True)
+    )
+    monkeypatch.setattr(runner, "_invoke_codex_sdk", lambda pr, repo_path: _sdk_result())
+
+    rc = runner.main(["--pr-id", "fixture-pr-1"])
+    assert rc == 0
+
+    artifact = _read_artifact("fixture-pr-1")
+    assert artifact["capture"]["status"] == "captured"
+    assert artifact["review_run_result"] == _sdk_result()
+    # Capture never posts or approves.
+    assert artifact["posted"]["inline_ids"] == []
+    assert artifact["posted"]["summary_id"] is None
+
+
+# ---------------------------------------------------------------------------
+# Tests — checkout history (base + merge-base evidence for the agent)
+# ---------------------------------------------------------------------------
+
+
+def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+
+
+def test_checkout_pr_fetches_full_history_for_base_evidence(tmp_path):
+    origin = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", str(origin)], check=True, capture_output=True)
+
+    seed = tmp_path / "seed"
+    seed.mkdir()
+    _git(["init"], seed)
+    _git(["config", "user.email", "test@example.com"], seed)
+    _git(["config", "user.name", "Test"], seed)
+    (seed / "base.txt").write_text("base\n")
+    _git(["add", "."], seed)
+    _git(["commit", "-m", "base"], seed)
+    base_sha = _git(["rev-parse", "HEAD"], seed).stdout.strip()
+    _git(["branch", "-M", "main"], seed)
+    _git(["remote", "add", "origin", str(origin)], seed)
+    _git(["push", "-u", "origin", "main"], seed)
+
+    _git(["checkout", "-b", "feature"], seed)
+    (seed / "head.txt").write_text("head\n")
+    _git(["add", "."], seed)
+    _git(["commit", "-m", "head"], seed)
+    head_sha = _git(["rev-parse", "HEAD"], seed).stdout.strip()
+    _git(["push", "-u", "origin", "feature"], seed)
+
+    pr = _fixture_pr()
+    pr = runner.SamplePR(
+        id=pr.id,
+        repo=pr.repo,
+        pr=pr.pr,
+        head_sha=head_sha,
+        web_search_mode=pr.web_search_mode,
+        reasoning_effort=pr.reasoning_effort,
+    )
+    dest = tmp_path / "checkout"
+    runner._checkout_pr(pr, dest, repo_url=str(origin))
+
+    assert _git(["rev-parse", "HEAD"], dest).stdout.strip() == head_sha
+    merge_base = subprocess.run(
+        ["git", "-C", str(dest), "merge-base", base_sha, head_sha],
+        capture_output=True,
+        text=True,
+    )
+    assert merge_base.returncode == 0
+    assert merge_base.stdout.strip() == base_sha
+    assert _git(["cat-file", "-t", base_sha], dest).stdout.strip() == "commit"

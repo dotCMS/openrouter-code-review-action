@@ -25,7 +25,7 @@ Every run reviews the full pinned PR and reconsiders applicable unresolved comme
   three passes; account for that model cost when migrating.
 - Pin `@v1` or an exact v1 release to retain the old behavior. Publishing v2 updates
   only `v2` and `latest`, never `v1`. `@latest` intentionally opts into major changes.
-- The separate act-mode SDK option and Codex evaluation baseline are unaffected.
+- The separate act-mode SDK option remains. Codex evaluation calls the SDK directly in read-only mode; it never routes through production review.
 
 ## Quick Start (Review)
 

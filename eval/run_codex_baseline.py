@@ -21,13 +21,18 @@ Design notes
   This honours the methodology rule that the bake-off is scored on real
   captured data, never on synthesized findings.
 
-* It **never posts comments to GitHub.** Live capture invokes the
-  existing Codex CLI in ``--dry-run`` mode so the structured
-  ``ReviewRunResult`` is parsed and saved without mutating any PR.
-  The "posted" block in the artifact is a *projection* of the dry-run
-  inline comments via the GitHub Pulls preview endpoint, capturing
-  the ``PostingOutcome`` shape (batch_submitted / per_comment_fallback
-  / skipped_after_422 counts) without touching the live PR.
+* It **never posts comments to GitHub or approves any PR.** Live
+  capture invokes the existing :class:`CodexClient` directly in
+  read-only sandbox mode against a pinned checkout, reusing the
+  production review guidelines and ``REVIEW_OUTPUT_SCHEMA``, and
+  stores the parsed ``ReviewRunResult`` without touching GitHub. The
+  "posted" block stays at its zero/default ``PostingOutcome`` shape
+  because no comments are ever published.
+
+* It **does not route through production review.** v2 moved
+  production review to the OpenRouter coordinator; the eval keeps a
+  standalone Codex SDK path so the baseline is measured on real Codex
+  output rather than mislabelled OpenRouter output.
 
 * It **isolates each PR's git checkout**: a fresh worktree per PR
   under ``${RUNNER_TEMP:-/tmp}/codex-baseline/<pr_id>/``. This avoids
@@ -47,8 +52,8 @@ Usage
 Required env (live capture):
 
 * ``OPENAI_API_KEY`` — Codex model auth.
-* ``GITHUB_TOKEN``    — read access to the source repo (PR diff +
-  inline comment thread for review-continuation context).
+
+* ``GITHUB_TOKEN`` — read the pinned PR head/base metadata; never post.
 """
 
 from __future__ import annotations
@@ -263,29 +268,38 @@ def _live_env_ok() -> tuple[bool, str]:
     return True, ""
 
 
-def _checkout_pr(pr: SamplePR, dest: Path) -> None:
+def _checkout_pr(pr: SamplePR, dest: Path, *, repo_url: str | None = None) -> None:
     """Clone ``pr.repo`` and check out the pinned ``head_sha`` at ``dest``.
 
-    Uses a shallow clone of just the pinned commit to keep the runner
-    cheap on a 71-file refactor PR. Falls back to a full clone if the
-    server refuses single-commit fetch.
+    Fetches full history for every branch tip plus the pinned head so
+    the PR base commit and its merge base are present. The read-only
+    Codex agent runs ``git diff <base>...<head>`` in this checkout; a
+    depth-1 head-only fetch omits both the base and the merge base.
+
+    ``repo_url`` overrides the GitHub URL so tests can point at a local
+    bare repository instead of the network.
     """
     dest.mkdir(parents=True, exist_ok=True)
-    repo_url = f"https://github.com/{pr.repo}.git"
-    init = subprocess.run(["git", "init", str(dest)], check=True, capture_output=True)
-    _ = init.stdout
+    remote = repo_url or f"https://github.com/{pr.repo}.git"
+    subprocess.run(["git", "init", str(dest)], check=True, capture_output=True)
     subprocess.run(
-        ["git", "-C", str(dest), "remote", "add", "origin", repo_url],
+        ["git", "-C", str(dest), "remote", "add", "origin", remote],
         check=True,
         capture_output=True,
     )
-    fetch = subprocess.run(
-        ["git", "-C", str(dest), "fetch", "--depth", "1", "origin", pr.head_sha],
+    subprocess.run(
+        ["git", "-C", str(dest), "fetch", "--no-tags", "origin"],
+        check=True,
         capture_output=True,
     )
-    if fetch.returncode != 0:
-        # Fallback: full fetch if the server doesn't allow single-SHA fetch.
-        subprocess.run(["git", "-C", str(dest), "fetch", "origin"], check=True, capture_output=True)
+    # The pinned head may be unreachable from any branch (unmerged PR),
+    # so fetch it explicitly. A server that refuses single-SHA fetches
+    # still leaves the branch fetch above in place.
+    subprocess.run(
+        ["git", "-C", str(dest), "fetch", "--no-tags", "origin", pr.head_sha],
+        check=False,
+        capture_output=True,
+    )
     subprocess.run(
         ["git", "-C", str(dest), "checkout", "--detach", pr.head_sha],
         check=True,
@@ -293,83 +307,107 @@ def _checkout_pr(pr: SamplePR, dest: Path) -> None:
     )
 
 
-def _invoke_codex_cli(pr: SamplePR, repo_path: Path) -> dict[str, Any]:
-    """Run the existing Codex CLI in --dry-run mode and parse its output.
-
-    The CLI prints the structured ``ReviewRunResult`` JSON when invoked
-    with ``--dry-run`` (it skips posting but still prints the parsed
-    payload). We capture stdout, split out the JSON envelope, and
-    return it.
-    """
-    cmd = [
-        sys.executable,
-        "-m",
-        "cli.main",
-        "--repo",
-        pr.repo,
-        "--pr",
-        str(pr.pr),
-        "--repo-root",
-        str(repo_path),
-        "--mode",
-        "review",
-        "--model",
-        pr.model,
-        "--reasoning-effort",
-        pr.reasoning_effort,
-        "--web-search-mode",
-        pr.web_search_mode,
-        "--dry-run",
-        "--debug",
-        "1",
+def _build_sdk_prompt(pr: SamplePR, base_sha: str, guidelines: str) -> str:
+    """Build the read-only Codex prompt with pinned benchmark context."""
+    diff_rev = f"{base_sha}...{pr.head_sha}"
+    parts = [
+        "You are an autonomous code review assistant.",
+        "Follow the review guidelines below verbatim while producing "
+        "prioritized, actionable findings.",
+        "",
+        "<benchmark_context>",
+        f"<repository>{pr.repo}</repository>",
+        f"<pull_request>{pr.pr}</pull_request>",
+        f"<head_sha>{pr.head_sha}</head_sha>",
+        f"<base_sha>{base_sha or 'unknown'}</base_sha>",
+        "</benchmark_context>",
     ]
-    env = dict(os.environ)
-    # Make sure the cli package can be found when run from outside the action checkout.
-    pythonpath = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = str(REPO_ROOT) + (os.pathsep + pythonpath if pythonpath else "")
-    proc = subprocess.run(
-        cmd,
-        cwd=str(REPO_ROOT),
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
+    guidelines_text = guidelines.strip()
+    if guidelines_text:
+        parts.extend(["", "Review guidelines:", guidelines_text])
+    parts.extend(
+        [
+            "",
+            "The repository is checked out in the current working directory "
+            "at the pinned head SHA.",
+            f"Run `git diff {diff_rev}` to inspect the changes under review.",
+            "Use HEAD (right side) line numbers when citing code locations.",
+        ]
     )
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"codex CLI dry-run failed (rc={proc.returncode}); stderr={proc.stderr[-2000:]!r}"
-        )
-    return _extract_review_run_result(proc.stdout)
+    return "\n".join(parts).strip()
 
 
-def _extract_review_run_result(stdout: str) -> dict[str, Any]:
-    """Parse a ``ReviewRunResult`` JSON envelope from CLI stdout.
+def _invoke_codex_sdk(pr: SamplePR, repo_path: Path) -> dict[str, Any]:
+    """Run the existing Codex SDK read-only against the pinned checkout.
 
-    The CLI emits the structured payload as a single JSON object on
-    stdout in dry-run mode (with surrounding human-readable lines).
-    We scan for the first ``{`` that begins a balanced JSON object
-    containing the required ``findings`` / ``carried_forward`` keys.
+    v2 moved production review to the OpenRouter coordinator, so the
+    eval talks to :class:`CodexClient` directly instead of shelling out
+    to ``cli.main --mode review`` (which would now run OpenRouter). It
+    reuses the production review guidelines and
+    ``REVIEW_OUTPUT_SCHEMA`` and returns the parsed ``ReviewRunResult``
+    as a dict, with no GitHub posting or approval.
+
+    The SDK import is resolved before entering the PR worktree so a
+    ``cli`` package inside the checked-out PR can never shadow the
+    action's. It is intentionally lazy: the eval module must load
+    without the optional ``codex-python`` package installed.
     """
-    decoder = json.JSONDecoder()
-    idx = 0
-    while True:
-        next_brace = stdout.find("{", idx)
-        if next_brace == -1:
-            break
-        try:
-            obj, end = decoder.raw_decode(stdout, next_brace)
-        except json.JSONDecodeError:
-            idx = next_brace + 1
-            continue
-        if (
-            isinstance(obj, dict)
-            and "findings" in obj
-            and "carried_forward" in obj
-            and "overall_correctness" in obj
-        ):
-            return obj
-        idx = end
-    raise RuntimeError("could not locate a ReviewRunResult JSON envelope in CLI stdout")
+    if str(REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(REPO_ROOT))
+
+    from cli.clients.codex_client import CodexClient
+    from cli.clients.github_client import GitHubClient
+    from cli.core.config import ReviewConfig
+    from cli.core.models import REVIEW_OUTPUT_SCHEMA, ReviewRunResult
+    from cli.review.review_prompt import load_guidelines
+
+    # ReviewConfig.validate() blocks review mode with the openai provider
+    # (v2 routes production review through OpenRouter); the eval calls
+    # CodexClient directly and deliberately never validates as production.
+    config = ReviewConfig(
+        github_token=os.environ.get("GITHUB_TOKEN", ""),
+        repository=pr.repo,
+        pr_number=pr.pr,
+        mode="review",
+        model_provider="openai",
+        openai_api_key=os.environ.get("OPENAI_API_KEY", ""),
+        model_name=pr.model,
+        reasoning_effort=pr.reasoning_effort,
+        web_search_mode=pr.web_search_mode,
+        debug_level=1,
+        stream_output=False,
+        repo_root=repo_path,
+    )
+    snapshot = GitHubClient(config).get_pr(pr.pr)
+    if snapshot.head is None or snapshot.head.sha != pr.head_sha:
+        raise RuntimeError("Benchmark PR head changed; refusing to capture a different revision")
+    if snapshot.base is None or not snapshot.base.sha:
+        raise RuntimeError("Benchmark PR has no base revision")
+    base_sha = snapshot.base.sha
+    subprocess.run(
+        ["git", "-C", str(repo_path), "cat-file", "-e", f"{base_sha}^{{commit}}"],
+        check=True,
+        capture_output=True,
+    )
+    prompt = _build_sdk_prompt(pr, base_sha, load_guidelines(config))
+
+    previous_cwd = Path.cwd()
+    os.chdir(repo_path)
+    try:
+        output = CodexClient(config).execute_structured(
+            prompt,
+            sandbox_mode="read-only",
+            output_schema=REVIEW_OUTPUT_SCHEMA,
+            schema_prompt=('Produce the JSON review output now. Return "carried_forward" as [].'),
+        )
+    finally:
+        os.chdir(previous_cwd)
+
+    try:
+        payload = json.loads(output)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Codex SDK returned non-JSON review output") from exc
+    return ReviewRunResult.from_payload(payload).as_dict()
 
 
 def capture_one(pr: SamplePR, *, dry_run_only: bool, force: bool) -> str:
@@ -389,8 +427,8 @@ def capture_one(pr: SamplePR, *, dry_run_only: bool, force: bool) -> str:
             posted=None,
             notes=(
                 "Placeholder written by --dry-run-only. Re-run without "
-                "--dry-run-only on a host with OPENAI_API_KEY + GITHUB_TOKEN "
-                "+ codex-python installed to capture the live baseline."
+                "--dry-run-only on a host with OPENAI_API_KEY and "
+                "codex-python installed to capture the live baseline."
             ),
         )
         print(f"[pending] {pr.id}: placeholder written", file=sys.stderr)
@@ -414,7 +452,7 @@ def capture_one(pr: SamplePR, *, dry_run_only: bool, force: bool) -> str:
         shutil.rmtree(repo_dir)
     try:
         _checkout_pr(pr, repo_dir)
-        rrr = _invoke_codex_cli(pr, repo_dir)
+        rrr = _invoke_codex_sdk(pr, repo_dir)
     except Exception as exc:
         write_artifact(
             pr,
@@ -431,7 +469,7 @@ def capture_one(pr: SamplePR, *, dry_run_only: bool, force: bool) -> str:
         capture_status="captured",
         review_run_result=rrr,
         posted=None,
-        notes="Captured via cli.main --dry-run on isolated worktree",
+        notes="Captured via Codex SDK (read-only) on isolated worktree",
     )
     print(f"[captured] {pr.id}: {len(rrr.get('findings') or [])} findings", file=sys.stderr)
     return "captured"
@@ -477,7 +515,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--dry-run-only",
         action="store_true",
         help=(
-            "Do not invoke the Codex CLI; just write/refresh schema-"
+            "Do not invoke the Codex SDK; just write/refresh schema-"
             "conforming placeholders. Useful for bootstrapping the "
             "artifact directory before live-capture access is available."
         ),

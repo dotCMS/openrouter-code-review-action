@@ -306,7 +306,13 @@ def test_main_runs_review_workflow_for_actions_pr_event(monkeypatch, tmp_path, c
     rc = main_module.main()
 
     assert rc == 0
-    assert "Review completed: patch is incorrect, 1 findings" in capsys.readouterr().out
+    output = capsys.readouterr().out
+    assert "Review completed: patch is incorrect, 1 findings" in output
+    marker = output.splitlines()[-1]
+    assert marker.startswith("[review-result] ")
+    payload = json.loads(marker.removeprefix("[review-result] "))
+    assert payload["overall_correctness"] == "patch is incorrect"
+    assert len(payload["findings"]) == 1
 
 
 def test_main_runs_review_workflow_in_review_mode(monkeypatch, capsys) -> None:

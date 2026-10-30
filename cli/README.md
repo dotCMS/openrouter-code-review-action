@@ -129,7 +129,9 @@ findings and one summary are posted; debate remains in attributed run logs
 The composite Action creates a summary per attempt before startup and updates only
 that comment with the final verdict or failed/cancelled status. Every attempt has
 its own visible workflow link; historical verdicts remain tied to their own runs.
-The local CLI does not run these Action lifecycle steps.
+The local CLI does not run these Action lifecycle steps. Successful CLI reviews
+emit the consolidated `ReviewRunResult` as one `[review-result] <JSON>` stdout line;
+evaluation captures use that marker, never intermediate panel turns.
 
 Configured credentials are redacted; other sensitive source information may still
 appear in discussion, so protect log access. No private reasoning stream is logged.

@@ -208,6 +208,13 @@ is the tiebreaker:
 
 ### 4.1 Per-PR run protocol
 
+The protocol below describes the historical single-agent parity benchmark. In v2,
+OpenRouter captures exercise the collaborative production coordinator, while Codex
+captures call the SDK directly, read-only, with pinned PR head/base and shared
+review guidelines. Their orchestration and prompt context differ; new captures
+are end-to-end workflow comparisons, not evidence of same-prompt parity. Both
+runners retain dry-run/no-publication behavior.
+
 For each PR in `sample-prs.yaml`:
 
 1. **Pin the head SHA.** Check out `head_sha` exactly. Do not
