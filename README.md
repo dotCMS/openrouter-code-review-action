@@ -235,7 +235,10 @@ verdict repairs cannot discard findings or change disposition actions. A second
 invalid response still fails closed; provider/execution errors are not retried.
 The correction can incur one extra structured-output completion.
 
-Reviews start fresh on every run. Prior applicable dotbot comments are reconsidered
+Reviews start fresh on every run. All applicable unresolved dotbot findings enter
+the ledger and receive explicit dispositions; there is no 200-issue truncation.
+An Action attempt is bound to its startup status-comment ID; deletion or corruption
+of that comment prevents publication and approval. Prior findings are reconsidered
 through explicit dispositions; prior verdicts never count as current votes. There
 is no sequential fallback or review resume/cache path. Panel options are configured
 in the YAML file, not new CLI flags or Action inputs. The steering instructions

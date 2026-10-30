@@ -98,7 +98,7 @@ def render_prior_dotbot_comments_for_prompt(
     lines: list[str] = []
     if applicable_comments:
         lines.append("<prior_dotbot_review_comments>")
-        for comment in applicable_comments[:200]:
+        for comment in applicable_comments:
             lines.append(
                 json.dumps(
                     {

@@ -64,8 +64,10 @@ module.exports = async function reportReviewStatus({ github, context, core, stat
     `[Workflow run ${run.run_id} — attempt ${run.attempt}](${url})`,
   ].join('\n');
   if (summary) {
-    await github.rest.issues.updateComment({ owner, repo, comment_id: summary.id, body });
+    const result = await github.rest.issues.updateComment({ owner, repo, comment_id: summary.id, body });
+    return result.data.id;
   } else {
-    await github.rest.issues.createComment({ owner, repo, issue_number: pr.number, body });
+    const result = await github.rest.issues.createComment({ owner, repo, issue_number: pr.number, body });
+    return result.data.id;
   }
 };

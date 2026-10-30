@@ -234,6 +234,34 @@ def test_prior_comments_require_explicit_dispositions(tmp_path: Path) -> None:
     assert result.overall_correctness == "patch is incorrect"
 
 
+def test_every_applicable_prior_finding_is_rendered_and_voted_beyond_200(tmp_path: Path) -> None:
+    from cli.review.dedupe import render_prior_dotbot_comments_for_prompt
+
+    prior = [
+        PriorDotBotReviewComment(
+            id=f"prior{i}",
+            thread_id=f"thread{i}",
+            path="src.py",
+            line=1,
+            body="Prior issue",
+            current_code="authorize(user)",
+            is_currently_applicable=True,
+        )
+        for i in range(201)
+    ]
+    assert '"id": "prior200"' in render_prior_dotbot_comments_for_prompt(prior)
+
+    def handler(prompt: str, kwargs: dict[str, Any]) -> str:
+        ledger = _ledger(prompt)
+        assert len(ledger) == 201
+        return _turn(votes={item["issue_id"]: item["issue_id"] == "P201" for item in ledger})
+
+    panel, _ = _panel(_config(tmp_path), handler)
+    result = _run(panel, tmp_path, prior)
+    assert result.carried_forward_comment_ids == ["prior200"]
+    assert result.overall_correctness == "patch is incorrect"
+
+
 @pytest.mark.parametrize("failure", ["invalid-json", "exception", "timeout"])
 def test_failed_reviewer_never_becomes_an_approval_vote(tmp_path: Path, failure: str) -> None:
     release = threading.Event()

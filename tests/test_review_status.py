@@ -61,8 +61,8 @@ def _report(
         "  pulls: {get: async () => ({data: {head: {sha: " + json.dumps(head) + "}}})},\n"
         "  issues: {\n"
         "   listComments: () => {},\n"
-        "   updateComment: async (args) => mutations.push(['update', args]),\n"
-        "   createComment: async (args) => mutations.push(['create', args]),\n"
+        "   updateComment: async (args) => {mutations.push(['update', args]); return {data: {id: args.comment_id}};},\n"
+        "   createComment: async (args) => {mutations.push(['create', args]); return {data: {id: 10}};},\n"
         "  },\n"
         " },\n"
         "};\n"
@@ -70,7 +70,7 @@ def _report(
         " payload: {pull_request: {number: 14, head: {sha: 'head'}}}};\n"
         "report({github, context, core: {info: () => {}, warning: () => {}}, status: "
         + json.dumps(status)
-        + "}).then(() => console.log(JSON.stringify({mutations})))\n"
+        + "}).then((result) => console.log(JSON.stringify({mutations, result})))\n"
         ".catch((error) => {console.error(error); process.exitCode = 1;});\n",
         encoding="utf-8",
     )
@@ -91,6 +91,7 @@ def test_status_replaces_stale_verdict_with_attempt_link(tmp_path: Path, status:
     verb, payload = result["mutations"][0]
     assert verb == "create"
     assert payload["issue_number"] == 14
+    assert result["result"] == 10
     body = payload["body"]
     assert "patch is correct" not in body
     assert "no completed verdict" in body
@@ -175,6 +176,12 @@ def test_action_reports_failures_even_before_cli_and_skips_act_and_dry_run() -> 
     steps = yaml.safe_load(Path("action.yml").read_text(encoding="utf-8"))["runs"]["steps"]
     start, end = steps[0], steps[-1]
     assert start["name"] == "Mark review in progress"
+    assert start["id"] == "review_status"
+    cli = next(step for step in steps if step.get("id") == "run_dotbot_cli")
+    assert (
+        cli["env"]["DOTBOT_REVIEW_STATUS_COMMENT_ID"] == "${{ steps.review_status.outputs.result }}"
+    )
+    assert "return await report" in start["with"]["script"]
     for step in (start, end):
         assert "inputs.mode == 'review'" in step["if"]
         assert "inputs.dry_run != '1'" in step["if"]

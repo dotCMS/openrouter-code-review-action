@@ -472,7 +472,15 @@ def test_panel_publishes_only_final_deduplicated_findings(
 
 
 @pytest.mark.parametrize(
-    "failure", ["invalid-output", "head-changed", "base-changed", "base-missing", "run-superseded"]
+    "failure",
+    [
+        "invalid-output",
+        "head-changed",
+        "base-changed",
+        "base-missing",
+        "run-superseded",
+        "status-missing",
+    ],
 )
 def test_incomplete_or_stale_panel_cannot_publish_or_approve(
     tmp_path: Path,
@@ -497,6 +505,10 @@ def test_incomplete_or_stale_panel_cannot_publish_or_approve(
         ),
     )
     monkeypatch.setattr(workflow, "_panel_diff", lambda *args: "pinned diff")
+    if failure == "status-missing":
+        monkeypatch.setenv("GITHUB_RUN_ID", "100")
+        monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+        monkeypatch.setenv("DOTBOT_REVIEW_STATUS_COMMENT_ID", "20")
     if failure == "run-superseded":
         monkeypatch.setenv("GITHUB_RUN_ID", "100")
         monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
@@ -726,6 +738,32 @@ def test_changes_during_thread_resolution_prevent_approval(
         workflow.process_review(7)
     assert github.resolved_thread_ids == ["thread-1"]
     assert not approvals
+
+
+def test_all_explicitly_rejected_prior_threads_can_resolve_beyond_200(tmp_path: Path) -> None:
+    from cli.core.models import PriorDotBotReviewComment, ReviewRunResult
+
+    pr = _FakePR()
+    github = _FakeGitHubClient(pr)
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path, resolve_stale_threads=True), github_client=cast(Any, github)
+    )
+    prior = [
+        PriorDotBotReviewComment(
+            id=f"prior{i}",
+            thread_id=f"thread{i}",
+            path="src.py",
+            line=1,
+            body="Prior issue",
+            current_code="old()",
+            is_currently_applicable=True,
+        )
+        for i in range(201)
+    ]
+    review = ReviewRunResult.from_payload(json.loads(_correct_response()))
+    workflow._resolve_stale_prior_threads(cast(Any, pr), prior_comments=prior, review=review)
+    assert len(github.resolved_thread_ids) == 201
+    assert github.resolved_thread_ids[-1] == "thread200"
 
 
 @pytest.fixture(autouse=True)

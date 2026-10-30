@@ -182,7 +182,7 @@ class ReviewCoordinator:
         head_sha: str,
     ) -> ReviewRunResult:
         instructions = load_panel_instructions(self.config)
-        for comment in [c for c in prior_comments if c.is_currently_applicable][:200]:
+        for comment in [c for c in prior_comments if c.is_currently_applicable]:
             issue_id = f"P{len(self.issues) + 1}"
             self.issues[issue_id] = PanelIssue(
                 issue_id, prior=CarriedForwardReviewComment(comment.id, comment.current_code)

@@ -518,11 +518,7 @@ class ReviewWorkflow:
             return
 
         carried_ids = set(review.carried_forward_comment_ids)
-        # Mirror render_prior_dotbot_comments_for_prompt's 200-comment cap so
-        # we only ever resolve threads the reviewers actually saw.
-        candidates = [comment for comment in prior_comments if comment.is_currently_applicable][
-            :200
-        ]
+        candidates = [comment for comment in prior_comments if comment.is_currently_applicable]
         stale_thread_ids: list[str] = []
         for comment in candidates:
             if comment.id in carried_ids:
@@ -728,6 +724,9 @@ class ReviewWorkflow:
                 latest_comment_id = max(latest_comment_id, comment.id)
                 if identity == current:
                     own_comment_id = max(own_comment_id or 0, comment.id)
+            expected_comment_id = os.environ.get("DOTBOT_REVIEW_STATUS_COMMENT_ID")
+            if expected_comment_id and own_comment_id != int(expected_comment_id):
+                raise ReviewContractError("Review attempt status comment is missing or invalid")
             if own_comment_id is not None and latest_comment_id > own_comment_id:
                 raise ReviewContractError("A newer review run owns the PR summary")
 
