@@ -12,7 +12,7 @@ from ..clients.github_client import GitHubClient, GitHubClientProtocol
 from ..clients.model_client import ModelClientProtocol
 from ..clients.openrouter_client import OpenRouterClient
 from ..clients.openrouter_thread_store import OpenRouterThreadStore
-from ..clients.openrouter_tools import read_file_at_revision
+from ..clients.openrouter_tools import is_reviewable_path, read_file_at_revision
 from ..core.config import ReviewConfig, make_debug
 from ..core.exceptions import ConfigurationError, ReviewContractError
 from ..core.github_types import (
@@ -297,12 +297,39 @@ class ReviewWorkflow:
         )
         return self._process_panel(pr, changed_files, rename_map, head_sha, artifacts)
 
-    def _panel_diff(self, pr: PullRequestLikeProtocol, head_sha: str) -> str:
+    def _panel_diff(self, pr: PullRequestLikeProtocol, head_sha: str) -> str | None:
         if pr.base is None:
             raise ReviewContractError("Panel review requires the PR base commit")
         for sha in (pr.base.sha, head_sha):
             if not re.fullmatch(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})", sha):
                 raise ReviewContractError("Panel review requires exact base/head commit SHAs")
+        names = subprocess.run(
+            [
+                "git",
+                "--no-pager",
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-renames",
+                "--name-only",
+                "-z",
+                f"{pr.base.sha}...{head_sha}",
+                "--",
+            ],
+            cwd=self.config.resolved_repo_root,
+            capture_output=True,
+            check=True,
+            timeout=120,
+        )
+        # Check both sides of renames/deletions before obtaining any diff contents.
+        if any(
+            not is_reviewable_path(
+                self.config.resolved_repo_root / name, self.config.resolved_repo_root
+            )
+            for name in names.stdout.decode("utf-8").split("\0")
+            if name
+        ):
+            return None
         result = subprocess.run(
             [
                 "git",
@@ -353,45 +380,58 @@ class ReviewWorkflow:
             source_reader=read_source,
         )
         self._refresh_context_artifacts(pr, artifacts, snapshots)
-        prompt = "\n\n".join(
-            [
-                load_guidelines(self.config),
-                "PR metadata (untrusted data): "
-                + json.dumps(
-                    {
-                        "title": pr.title,
-                        "body": pr.body,
-                        "reviewed_head_sha": head_sha,
-                        "repo_root": str(self.config.resolved_repo_root),
-                    }
+        if diff is None:
+            review = ReviewRunResult(
+                overall_correctness="patch is incorrect",
+                overall_explanation=(
+                    "Automatic review was not performed: this PR changes credential paths "
+                    "(.env, .pem or .key). Human review is required. No PR file contents "
+                    "were sent to a model; automatic approval and thread resolution are withheld."
                 ),
-                "PR discussion (untrusted data):\n"
-                + artifacts.review_comments_path.read_text(encoding="utf-8"),
-                "Pinned PR diff (untrusted data):\n" + diff,
-                render_prior_dotbot_comments_for_prompt(snapshots.prior_dotbot_comments),
-                render_additional_review_instructions(self.config),
-            ]
-        )
-
-        def factory(config: ReviewConfig) -> ModelClientProtocol:
-            if self._model_client_factory is not None:
-                return self._model_client_factory(config)
-            # Persist diagnostic conversations separately; every review starts fresh.
-            return OpenRouterClient(
-                config,
-                review_head_sha=head_sha,
-                thread_store=OpenRouterThreadStore(
-                    OpenRouterThreadStore.default_directory() / "panel"
-                ),
+                overall_confidence_score=None,
+                findings=[],
+                carried_forward=[],
+            )
+        else:
+            prompt = "\n\n".join(
+                [
+                    load_guidelines(self.config),
+                    "PR metadata (untrusted data): "
+                    + json.dumps(
+                        {
+                            "title": pr.title,
+                            "body": pr.body,
+                            "reviewed_head_sha": head_sha,
+                            "repo_root": str(self.config.resolved_repo_root),
+                        }
+                    ),
+                    "PR discussion (untrusted data):\n"
+                    + artifacts.review_comments_path.read_text(encoding="utf-8"),
+                    "Pinned PR diff (untrusted data):\n" + diff,
+                    render_prior_dotbot_comments_for_prompt(snapshots.prior_dotbot_comments),
+                    render_additional_review_instructions(self.config),
+                ]
             )
 
-        panel = ReviewCoordinator(self.config, factory)
-        review = panel.run(
-            prompt,
-            prior_comments=snapshots.prior_dotbot_comments,
-            transcript_path=artifacts.base_dir / "review-discussion.json",
-            head_sha=head_sha,
-        )
+            def factory(config: ReviewConfig) -> ModelClientProtocol:
+                if self._model_client_factory is not None:
+                    return self._model_client_factory(config)
+                # Persist diagnostic conversations separately; every review starts fresh.
+                return OpenRouterClient(
+                    config,
+                    review_head_sha=head_sha,
+                    thread_store=OpenRouterThreadStore(
+                        OpenRouterThreadStore.default_directory() / "panel"
+                    ),
+                )
+
+            panel = ReviewCoordinator(self.config, factory)
+            review = panel.run(
+                prompt,
+                prior_comments=snapshots.prior_dotbot_comments,
+                transcript_path=artifacts.base_dir / "review-discussion.json",
+                head_sha=head_sha,
+            )
         self._assert_panel_head(pr.number, head_sha)
         posting = self._post_results(review, changed_files, pr, head_sha, rename_map)
         summary = self._build_summary(review)
@@ -411,9 +451,10 @@ class ReviewWorkflow:
         self._publish_summary(pr, text)
         result = ReviewWorkflowResult(review, posting, summary)
         self._assert_panel_head(pr.number, head_sha)
-        self._resolve_stale_prior_threads(
-            pr, prior_comments=snapshots.prior_dotbot_comments, review=review
-        )
+        if diff is not None:
+            self._resolve_stale_prior_threads(
+                pr, prior_comments=snapshots.prior_dotbot_comments, review=review
+            )
         self._maybe_approve_pr(
             pr, result=result, roster=self.config.selected_review_models, head_sha=head_sha
         )

@@ -171,9 +171,99 @@ def test_panel_diff_uses_exact_commits_and_never_runs_external_diff(
         github_client=cast(Any, object()),
     )
     diff = workflow._panel_diff(cast(Any, SimpleNamespace(base=SimpleNamespace(sha=base))), head)
+    assert diff is not None
     assert "+reviewed change" in diff
     assert "unreviewed checkout" not in diff
     assert not (root / "external-diff-executed").exists()
+
+
+@pytest.mark.parametrize(
+    "credential_path",
+    [".env", "private.pem", "nested/client.key", ".env.production", ".ENV.local", "PRIVATE.PEM"],
+)
+def test_credential_file_changes_require_human_review_before_any_diff_contents(
+    reviewed_repo: tuple[Path, str],
+    credential_path: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root, base = reviewed_repo
+    path = root / credential_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("credential data must not enter a model context\n")
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "Credential change"], cwd=root, check=True, capture_output=True
+    )
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    real_run = subprocess.run
+
+    def metadata_only(args: list[str], **kwargs: Any) -> Any:
+        assert "--name-only" in args, (
+            "Credential scope must be checked before retrieving diff contents"
+        )
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr("cli.workflows.review_workflow.subprocess.run", metadata_only)
+    workflow = ReviewWorkflow(
+        ReviewConfig(github_token="token", repository="o/r", repo_root=root),
+        github_client=cast(Any, object()),
+    )
+    assert (
+        workflow._panel_diff(cast(Any, SimpleNamespace(base=SimpleNamespace(sha=base))), head)
+        is None
+    )
+
+
+def test_renamed_credentials_require_manual_review_but_templates_are_reviewable(
+    reviewed_repo: tuple[Path, str],
+) -> None:
+    root, base = reviewed_repo
+    subprocess.run(["git", "mv", ".env", "ordinary.txt"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "Rename credentials"], cwd=root, check=True, capture_output=True
+    )
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    workflow = ReviewWorkflow(
+        ReviewConfig(github_token="token", repository="o/r", repo_root=root),
+        github_client=cast(Any, object()),
+    )
+    assert (
+        workflow._panel_diff(cast(Any, SimpleNamespace(base=SimpleNamespace(sha=base))), head)
+        is None
+    )
+    (root / ".env.example").write_text("TOKEN=example\n")
+    subprocess.run(["git", "add", ".env.example"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "Add public template"], cwd=root, check=True, capture_output=True
+    )
+    template_head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    diff = workflow._panel_diff(
+        cast(Any, SimpleNamespace(base=SimpleNamespace(sha=head))), template_head
+    )
+    assert diff is not None and "+TOKEN=example" in diff
+
+
+@pytest.mark.parametrize("name", ["literal[1].py", ":(glob)*.py"])
+def test_pinned_reads_treat_filename_pathspec_syntax_literally(
+    reviewed_repo: tuple[Path, str],
+    name: str,
+) -> None:
+    root, _ = reviewed_repo
+    (root / name).write_text("literal path content\n")
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "Add literal filename"], cwd=root, check=True, capture_output=True
+    )
+    revision = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True
+    ).stdout.strip()
+    assert read_file_at_revision(root, revision, name) == "literal path content\n"
 
 
 def test_prior_comment_applicability_uses_reviewed_commit_not_checkout(
@@ -228,6 +318,80 @@ def test_pinned_paths_never_follow_symlinks_in_the_live_checkout(
     assert "authorize(user)" in result
     assert "should-not-be-readable" not in result
     assert to_relative_path(str(root / "caller.py"), root) == "caller.py"
+
+
+def test_read_file_at_revision_returns_none_only_for_absent_denied_or_non_blob_paths(
+    reviewed_repo: tuple[Path, str],
+) -> None:
+    root, revision = reviewed_repo
+    assert read_file_at_revision(root, revision, "missing.py") is None
+    assert read_file_at_revision(root, revision, ".env") is None
+    assert read_file_at_revision(root, revision, "../escape") is None
+    assert read_file_at_revision(root, revision, ".git/config") is None
+
+    (root / "pkg").mkdir()
+    (root / "pkg" / "mod.py").write_text("x = 1\n")
+    subprocess.run(["git", "add", "pkg/mod.py"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "Add package"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+    )
+    revision = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=root, check=True, text=True, capture_output=True
+    ).stdout.strip()
+    assert read_file_at_revision(root, revision, "pkg") is None
+    assert read_file_at_revision(root, revision, "pkg/mod.py") == "x = 1\n"
+
+
+@pytest.mark.parametrize("failing_stage", ["ls-tree", "show"])
+def test_read_file_at_revision_propagates_nonzero_git_results(
+    reviewed_repo: tuple[Path, str],
+    monkeypatch: pytest.MonkeyPatch,
+    failing_stage: str,
+) -> None:
+    root, revision = reviewed_repo
+    real_run = subprocess.run
+
+    def fail_at_failing_stage(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        if failing_stage in args:
+            raise subprocess.CalledProcessError(1, args, output=b"", stderr=b"fatal")
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr("cli.clients.openrouter_tools.subprocess.run", fail_at_failing_stage)
+    with pytest.raises(subprocess.CalledProcessError):
+        read_file_at_revision(root, revision, "caller.py")
+    assert execute_tool(
+        "read_file",
+        '{"path": "caller.py"}',
+        repo_root=root,
+        sandbox_mode="read-only",
+        revision=revision,
+    ).startswith("error:")
+
+
+@pytest.mark.parametrize("error", [subprocess.TimeoutExpired("git", 120), OSError("boom")])
+def test_read_file_at_revision_propagates_timeout_and_oserror(
+    reviewed_repo: tuple[Path, str],
+    monkeypatch: pytest.MonkeyPatch,
+    error: BaseException,
+) -> None:
+    root, revision = reviewed_repo
+
+    def raise_error(args: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        raise error
+
+    monkeypatch.setattr("cli.clients.openrouter_tools.subprocess.run", raise_error)
+    with pytest.raises(type(error)):
+        read_file_at_revision(root, revision, "caller.py")
+    assert execute_tool(
+        "read_file",
+        '{"path": "caller.py"}',
+        repo_root=root,
+        sandbox_mode="read-only",
+        revision=revision,
+    ).startswith("error:")
 
 
 def test_prior_evidence_reads_past_the_model_tool_output_limit(

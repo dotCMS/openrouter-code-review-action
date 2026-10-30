@@ -30,12 +30,11 @@ from .review_prompt import load_panel_instructions
 _DISPOSITION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "issue_id": {"type": "string"},
         "action": {"type": "string", "enum": ["retain", "reject"]},
         "reason": {"type": "string"},
         "evidence": {"type": "string"},
     },
-    "required": ["issue_id", "action", "reason", "evidence"],
+    "required": ["action", "reason", "evidence"],
     "additionalProperties": False,
 }
 PANEL_OUTPUT_SCHEMA: dict[str, Any] = {
@@ -48,10 +47,39 @@ PANEL_OUTPUT_SCHEMA: dict[str, Any] = {
         },
         "message": {"type": "string"},
         "security_summary": {"type": "string"},
-        "dispositions": {"type": "array", "items": _DISPOSITION_SCHEMA},
+        "dispositions": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+            "additionalProperties": False,
+        },
     },
     "required": [*REVIEW_OUTPUT_SCHEMA["required"], "message", "security_summary", "dispositions"],
 }
+
+
+def _panel_output_schema(issue_ids: set[str]) -> dict[str, Any]:
+    return {
+        **PANEL_OUTPUT_SCHEMA,
+        "properties": {
+            **PANEL_OUTPUT_SCHEMA["properties"],
+            "dispositions": {
+                "type": "object",
+                "properties": {issue_id: _DISPOSITION_SCHEMA for issue_id in sorted(issue_ids)},
+                "required": sorted(issue_ids),
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ReviewContractError("Panel JSON contains a duplicate field")
+        result[key] = value
+    return result
 
 
 @dataclass(frozen=True)
@@ -65,7 +93,7 @@ class PanelTurn:
     @classmethod
     def parse(cls, output: str, issue_ids: set[str]) -> PanelTurn:
         try:
-            payload = json.loads(output)
+            payload = json.loads(output, object_pairs_hook=_unique_json_object)
         except json.JSONDecodeError as exc:
             raise ReviewContractError("Panel response is not valid JSON") from exc
         if not isinstance(payload, dict) or set(payload) != set(PANEL_OUTPUT_SCHEMA["required"]):
@@ -79,22 +107,17 @@ class PanelTurn:
         if review.carried_forward:
             raise ReviewContractError("Panel prior comments must be addressed by ledger ID")
         raw = payload["dispositions"]
-        if not isinstance(raw, list):
-            raise ReviewContractError("Panel dispositions must be an array")
+        if not isinstance(raw, dict) or set(raw) != issue_ids:
+            raise ReviewContractError("Panel dispositions must cover exactly the ledger IDs")
         dispositions: dict[str, bool] = {}
-        for item in raw:
+        for issue_id, item in raw.items():
             if not isinstance(item, dict) or set(item) != set(_DISPOSITION_SCHEMA["required"]):
                 raise ReviewContractError("Invalid panel disposition fields")
             if any(not isinstance(value, str) or not value.strip() for value in item.values()):
                 raise ReviewContractError("Each disposition needs a reason and code evidence")
-            issue_id = item["issue_id"]
-            if issue_id not in issue_ids or issue_id in dispositions:
-                raise ReviewContractError("Panel disposition has an unknown or duplicate issue ID")
             if item["action"] not in {"retain", "reject"}:
                 raise ReviewContractError("Invalid panel disposition action")
             dispositions[issue_id] = item["action"] == "retain"
-        if set(dispositions) != issue_ids:
-            raise ReviewContractError("Panel response omitted issue dispositions")
         if (
             review.findings or any(dispositions.values())
         ) and review.overall_correctness == "patch is correct":
@@ -298,7 +321,7 @@ class ReviewCoordinator:
             try:
                 output = self.clients[model].execute_structured(
                     prompt + f"\nYour reviewer identity: {model}",
-                    output_schema=PANEL_OUTPUT_SCHEMA,
+                    output_schema=_panel_output_schema(issue_ids),
                     schema_prompt="Return the panel JSON now, covering every ledger ID with a reason and code evidence.",
                     model_name=model,
                     suppress_stream=True,
@@ -325,8 +348,13 @@ class ReviewCoordinator:
                     f"Panel {phase} timed out waiting for {pending}"
                 ) from exc
             if isinstance(result, BaseException):
+                detail = (
+                    f": {self._redact(str(result))}"
+                    if isinstance(result, ReviewContractError)
+                    else ""
+                )
                 raise DotBotExecutionError(
-                    f"Panel {phase} failed for {model}: {type(result).__name__}"
+                    f"Panel {phase} failed for {model}: {type(result).__name__}{detail}"
                 ) from result
             turns[model] = result
         return turns

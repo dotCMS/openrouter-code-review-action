@@ -75,15 +75,14 @@ def _turn(
             "carried_forward": [],
             "message": message,
             "security_summary": "Checked authorization; no runtime tests performed.",
-            "dispositions": [
-                {
-                    "issue_id": key,
+            "dispositions": {
+                key: {
                     "action": "retain" if value else "reject",
                     "reason": "The caller path supports this position.",
                     "evidence": "src.py:1: authorize(user)",
                 }
                 for key, value in votes.items()
-            ],
+            },
         }
     )
 
@@ -301,24 +300,67 @@ def test_panel_never_resumes_a_cached_verdict_and_roster_changes_start_fresh(
 
 @pytest.mark.parametrize(
     "change",
-    ["missing", "duplicate", "unknown", "empty-evidence", "contradiction", "unknown-field"],
+    ["missing", "array", "unknown", "empty-evidence", "contradiction", "unknown-field"],
 )
 def test_panel_output_validation_is_fail_closed(change: str) -> None:
     payload = json.loads(_turn(votes={"F1": True}))
     if change == "missing":
+        payload["dispositions"] = {}
+    elif change == "array":
         payload["dispositions"] = []
-    elif change == "duplicate":
-        payload["dispositions"] *= 2
     elif change == "unknown":
-        payload["dispositions"][0]["issue_id"] = "F999"
+        payload["dispositions"]["F999"] = payload["dispositions"].pop("F1")
     elif change == "empty-evidence":
-        payload["dispositions"][0]["evidence"] = " "
+        payload["dispositions"]["F1"]["evidence"] = " "
     elif change == "contradiction":
         payload["overall_correctness"] = "patch is correct"
     else:
         payload["raw_reasoning"] = "not allowed"
     with pytest.raises(ReviewContractError):
         PanelTurn.parse(json.dumps(payload), {"F1"})
+
+
+def test_provider_schema_requires_every_ledger_id_and_stays_round_local(tmp_path: Path) -> None:
+    def handler(prompt: str, kwargs: dict[str, Any]) -> str:
+        ids = {item["issue_id"] for item in _ledger(prompt)}
+        schema = kwargs["output_schema"]["properties"]["dispositions"]
+        assert schema["type"] == "object"
+        assert schema["required"] == sorted(ids)
+        assert set(schema["properties"]) == ids
+        assert schema["additionalProperties"] is False
+        return _turn(
+            votes={issue_id: True for issue_id in ids},
+            findings=[_finding(tmp_path)] if not ids else [],
+        )
+
+    panel, clients = _panel(_config(tmp_path), handler)
+    _run(panel, tmp_path)
+    for client in clients.values():
+        first_schema = client.calls[0][1]["output_schema"]["properties"]["dispositions"]
+        assert first_schema["properties"] == {}
+        assert first_schema["required"] == []
+        assert client.calls[-1][1]["output_schema"]["properties"]["dispositions"]["required"] == [
+            "F1"
+        ]
+
+
+def test_duplicate_json_dispositions_fail_closed() -> None:
+    output = _turn(votes={"F1": True})
+    position = json.dumps(json.loads(output)["dispositions"]["F1"])
+    output = output.replace('"F1":', f'"F1": {position}, "F1":', 1)
+    with pytest.raises(ReviewContractError, match="duplicate field"):
+        PanelTurn.parse(output, {"F1"})
+
+
+def test_contract_failure_diagnostics_do_not_expose_credentials(tmp_path: Path) -> None:
+    def handler(prompt: str, kwargs: dict[str, Any]) -> str:
+        raise ReviewContractError("Invalid position SECRET-MODEL")
+
+    panel, _ = _panel(_config(tmp_path), handler)
+    with pytest.raises(DotBotExecutionError, match="Invalid position ") as caught:
+        _run(panel, tmp_path)
+    assert "SECRET-MODEL" not in str(caught.value)
+    assert "[REDACTED]" in str(caught.value)
 
 
 def test_shared_client_is_rejected(tmp_path: Path) -> None:

@@ -123,6 +123,10 @@ findings and one summary are posted; debate remains in attributed run logs
 Configured credentials are redacted; other sensitive source information may still
 appear in discussion, so protect log access. No private reasoning stream is logged.
 
+Credential-path changes (`.env`, `.env.*`, `*.pem`, `*.key`, including deletions/renames)
+require human review instead of model calls, automatic approval or thread resolution.
+Public `.env.example`/`.env.sample` templates remain reviewable.
+
 The checkout needs both base/head commits for the pinned diff and inspection.
 Reviews start fresh; the session-resume, SHA-delta, cache restore/save, and direct
 OpenAI review-provider paths are removed in v2. Saved conversations are diagnostic

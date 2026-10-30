@@ -17,13 +17,15 @@ Use overall_explanation for the final outcome, NOT a transcript of the debate.
 A lack of evidence is not proof of safety. Never equate agreement with correctness.
 Never reproduce credentials or suspected secrets; cite their file and line instead.
 
-For EVERY issue in the supplied ledger, return exactly one disposition: retain
-or reject, with a concrete reason and file:line/code evidence. You may change your
+Return dispositions as an object keyed by EVERY supplied ledger ID, not an array.
+Each required ID must contain action (retain or reject), reason and file:line/code
+evidence; use {} only when the supplied ledger is empty. You may change your
 position after checking evidence; explicitly explain a retraction. Do not infer
 agreement from silence. Revisit challenged assumptions and inspect code again
 when necessary. In findings return ONLY genuinely new issues, not copies or
-paraphrases of ledger issues. To revise an issue, reject its old ID and propose
-the replacement. Return carried_forward as []: prior comments already have ledger
+paraphrases of ledger issues. If the ledger already contains duplicates, retain the
+canonical issue and reject redundant IDs with evidence naming that canonical ID.
+To revise an issue, reject its old ID and propose the replacement. Return carried_forward as []: prior comments already have ledger
 IDs and must receive dispositions like other issues. These panel verdict rules
 override the general guidelines' severity-based correctness rule: ANY retained
 or new issue, including P2/P3, requires overall_correctness='patch is incorrect'.

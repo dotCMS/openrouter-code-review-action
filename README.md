@@ -212,7 +212,11 @@ but repository-sensitive discussion still belongs only in appropriately protecte
 run logs. No external tracing service or additional framework is required.
 
 Panel tools read the pinned PR commit, list its files, and search its code;
-they cannot write files or execute arbitrary shell commands. The checkout must
+they cannot write files or execute arbitrary shell commands. PRs changing credential
+paths (`.env`, `.env.*`, `*.pem`, `*.key`, including deletions/renames) require human
+review: no PR file contents are sent to a review model, and approval/thread
+resolution are withheld. Public `.env.example`/`.env.sample` templates are allowed.
+The checkout must
 contain the PR base and head commits (`fetch-depth: 0` is recommended). Existing
 per-model timeouts apply to every pass; two discussion rounds mean three passes
 per model, plus one primary-model pass with `lead`. Provider billing can continue

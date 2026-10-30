@@ -152,7 +152,7 @@ def execute_tool(
             path = _resolve_repo_path(arguments.get("path"), repo_root)
             if isinstance(path, str):
                 return path
-            if not _reviewable_path(path, repo_root):
+            if not is_reviewable_path(path, repo_root):
                 return "error: review access to repository metadata or credential files is denied"
         return _tool_read_file(arguments, repo_root=repo_root)
     if name == "write_file":
@@ -166,21 +166,44 @@ def execute_tool(
     return f"error: unknown tool '{name}'"
 
 
-def _reviewable_path(path: Path, repo_root: Path) -> bool:
+def is_reviewable_path(path: Path, repo_root: Path) -> bool:
     resolved = Path(os.path.abspath(path))
     if not resolved.is_relative_to(repo_root.resolve()):
         return False
     parts = resolved.relative_to(repo_root.resolve()).parts
+    name, suffix = resolved.name.casefold(), resolved.suffix.casefold()
     return not (
         ".git" in parts
-        or resolved.name == ".env"
-        or (resolved.name.startswith(".env.") and resolved.suffix not in {".example", ".sample"})
-        or resolved.suffix in {".pem", ".key"}
+        or name == ".env"
+        or (name.startswith(".env.") and suffix not in {".example", ".sample"})
+        or suffix in {".pem", ".key"}
     )
 
 
+def _pinned_blob_at(repo_root: Path, revision: str, relative: str) -> bool:
+    """Probe the pinned tree so failed reads cannot masquerade as missing paths."""
+    tree = subprocess.run(
+        ["git", "--no-pager", "--literal-pathspecs", "ls-tree", "-z", revision, "--", relative],
+        cwd=repo_root,
+        capture_output=True,
+        timeout=COMMAND_TIMEOUT_SECONDS,
+        check=True,
+    )
+    for entry in tree.stdout.decode("utf-8", errors="replace").split("\0"):
+        metadata, _, path = entry.partition("\t")
+        fields = metadata.split()
+        if len(fields) >= 2 and fields[1] == "blob" and path == relative:
+            return True
+    return False
+
+
 def read_file_at_revision(repo_root: Path, revision: str, raw_path: str) -> str | None:
-    """Read full pinned evidence for host checks; model output limits belong to tools."""
+    """Read full pinned evidence for host checks; model output limits belong to tools.
+
+    Returns ``None`` only when the path is absent, denied, or not a blob at the
+    revision. Git probe/show failures (nonzero status, timeout, ``OSError``)
+    propagate to the caller.
+    """
     if len(revision) not in {40, 64} or any(
         char not in "0123456789abcdefABCDEF" for char in revision
     ):
@@ -189,17 +212,19 @@ def read_file_at_revision(repo_root: Path, revision: str, raw_path: str) -> str 
         return None
     # Git object paths must not follow symlinks in a different checkout.
     path = Path(os.path.abspath(repo_root.resolve() / raw_path))
-    if not _reviewable_path(path, repo_root):
+    if not is_reviewable_path(path, repo_root):
         return None
     relative = path.relative_to(repo_root.resolve()).as_posix()
+    if not _pinned_blob_at(repo_root, revision, relative):
+        return None
     result = subprocess.run(
         ["git", "--no-pager", "show", "--no-textconv", f"{revision}:{relative}"],
         cwd=repo_root,
         capture_output=True,
         timeout=COMMAND_TIMEOUT_SECONDS,
-        check=False,
+        check=True,
     )
-    return result.stdout.decode("utf-8", errors="replace") if result.returncode == 0 else None
+    return result.stdout.decode("utf-8", errors="replace")
 
 
 def _tool_inspect_revision(
@@ -249,21 +274,21 @@ def _tool_inspect_revision(
             content = "\n".join(
                 p
                 for p in content.split("\0")
-                if p and _reviewable_path(repo_root.resolve() / p, repo_root)
+                if p and is_reviewable_path(repo_root.resolve() / p, repo_root)
             )
         else:
             content = content.replace(f"{revision}:", "")
             content = "\n".join(
                 line
                 for line in content.splitlines()
-                if _reviewable_path(repo_root.resolve() / line.split(":", 1)[0], repo_root)
+                if is_reviewable_path(repo_root.resolve() / line.split(":", 1)[0], repo_root)
             )
         return (
             content[:MAX_TOOL_OUTPUT_CHARS] + "\n... (truncated)"
             if len(content) > MAX_TOOL_OUTPUT_CHARS
             else content
         ) or "(no matches)"
-    except (OSError, subprocess.TimeoutExpired, ValueError):
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError):
         return "error: reviewed-commit inspection failed"
 
 

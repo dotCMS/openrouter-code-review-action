@@ -311,7 +311,7 @@ def _panel_response(review_output: str) -> str:
             **payload,
             "message": "private debate contribution",
             "security_summary": "No changed trust-boundary issues found; static review only.",
-            "dispositions": [],
+            "dispositions": {},
         }
     )
 
@@ -370,6 +370,35 @@ class _CallbackPanelClient:
         return self.callback(prompt, kwargs)
 
 
+def test_credential_scope_withholds_approval_and_thread_resolution_without_model_calls(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pr = _prior_thread_pr()
+    github_client = _FakeGitHubClient(pr)
+    config = _make_config(tmp_path, resolve_stale_threads=True)
+    config.github_approval_token = "machine-token"
+
+    def forbidden(config: ReviewConfig) -> Any:
+        raise AssertionError("Credential-changing PRs must not reach a model")
+
+    workflow = ReviewWorkflow(
+        config, github_client=cast(Any, github_client), model_client_factory=forbidden
+    )
+    monkeypatch.setattr(workflow, "_panel_diff", lambda *args: None)
+    monkeypatch.setattr(
+        "cli.workflows.review_workflow.read_file_at_revision", lambda *args, **kwargs: "value = 1\n"
+    )
+    approvals = _patch_approval(monkeypatch)
+    result = workflow.process_review(7)
+    assert result.review.overall_correctness == "patch is incorrect"
+    assert "Human review is required" in result.review.overall_explanation
+    assert "No PR file contents were sent to a model" in result.review.overall_explanation
+    assert approvals == []
+    assert github_client.inline_comments == []
+    assert github_client.resolved_thread_ids == []
+
+
 def test_panel_publishes_only_final_deduplicated_findings(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -394,15 +423,14 @@ def test_panel_publishes_only_final_deduplicated_findings(
         ledger = json.loads(
             prompt.split("Issue ledger (data):\n", 1)[1].split("\nPrevious completed rounds", 1)[0]
         )
-        payload["dispositions"] = [
-            {
-                "issue_id": item["issue_id"],
+        payload["dispositions"] = {
+            item["issue_id"]: {
                 "action": "retain",
                 "reason": "Still reachable",
                 "evidence": "src.py:1: new",
             }
             for item in ledger
-        ]
+        }
         if not ledger:
             payload["findings"] = [
                 {
@@ -577,15 +605,14 @@ def test_panel_prior_thread_dispositions_control_resolution_and_approval(
         payload = json.loads(
             _panel_response(_incorrect_response() if retain else _correct_response())
         )
-        payload["dispositions"] = [
-            {
-                "issue_id": item["issue_id"],
+        payload["dispositions"] = {
+            item["issue_id"]: {
                 "action": "retain" if retain else "reject",
                 "reason": "Checked caller and guard",
                 "evidence": "src.py:1: value = 1",
             }
             for item in ledger
-        ]
+        }
         return json.dumps(payload)
 
     workflow = ReviewWorkflow(
