@@ -10,7 +10,12 @@ import pytest
 
 from cli.clients.openrouter_client import OpenRouterClient
 from cli.clients.openrouter_thread_store import OpenRouterThreadStore
-from cli.clients.openrouter_tools import READ_ONLY_TOOL_SPECS, execute_tool
+from cli.clients.openrouter_tools import (
+    MAX_READ_FILE_CHARS,
+    READ_ONLY_TOOL_SPECS,
+    execute_tool,
+    read_file_at_revision,
+)
 from cli.core.config import ReviewConfig
 from cli.review.dedupe import collect_prior_dotbot_review_comments
 from cli.review.patch_parser import to_relative_path
@@ -224,3 +229,48 @@ def test_pinned_paths_never_follow_symlinks_in_the_live_checkout(
     assert "authorize(user)" in result
     assert "should-not-be-readable" not in result
     assert to_relative_path(str(root / "caller.py"), root) == "caller.py"
+
+
+def test_prior_evidence_reads_past_the_model_tool_output_limit(
+    reviewed_repo: tuple[Path, str],
+) -> None:
+    root, _ = reviewed_repo
+    source = "# padding\n" * (MAX_READ_FILE_CHARS // 10 + 100) + "authorize(user)\n"
+    (root / "caller.py").write_text(source)
+    subprocess.run(["git", "add", "caller.py"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "commit", "-m", "Large reviewed source"], cwd=root, check=True, capture_output=True
+    )
+    revision = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=root, check=True, text=True, capture_output=True
+    ).stdout.strip()
+    assert read_file_at_revision(root, revision, "caller.py") == source
+    bounded = execute_tool(
+        "read_file",
+        '{"path": "caller.py"}',
+        repo_root=root,
+        sandbox_mode="read-only",
+        revision=revision,
+    )
+    assert "authorize(user)" not in bounded
+    assert bounded.endswith("... (truncated)")
+    thread = SimpleNamespace(
+        id="thread",
+        is_resolved=False,
+        comments=[
+            SimpleNamespace(
+                id="comment",
+                author="bot",
+                path="caller.py",
+                prompt_line=1,
+                body="**Current code:**\n```python\nauthorize(user)\n```",
+            )
+        ],
+    )
+    prior = collect_prior_dotbot_review_comments(
+        cast(Any, [thread]),
+        {"bot"},
+        root,
+        source_reader=lambda path: read_file_at_revision(root, revision, path),
+    )
+    assert prior[0].is_currently_applicable

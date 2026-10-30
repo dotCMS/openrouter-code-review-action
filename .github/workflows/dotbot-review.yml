@@ -69,7 +69,7 @@ jobs:
             exit 0
           fi
           # Preserve policy, discussion limits, and act settings when replacing only the roster.
-          python3 - "${MODELS[@]}" <<'PY'
+          python3 -I - "${MODELS[@]}" <<'PY'
           import sys
           from pathlib import Path
           import yaml

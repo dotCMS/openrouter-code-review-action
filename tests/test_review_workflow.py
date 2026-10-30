@@ -2319,8 +2319,13 @@ def test_panel_publishes_only_final_deduplicated_findings(
     pr = _FakePR()
     github_client = _FakeGitHubClient(pr)
     calls: list[str] = []
+    pr._issue_comments.append(_FakeIssueComment("Human clarifies the expected behavior."))
+    pr._review_comments.append(_FakeReviewComment("Human reviewer explains a caller constraint."))
 
     def respond(prompt: str, kwargs: dict[str, Any]) -> str:
+        assert "PR discussion (untrusted data):" in prompt
+        assert "Human clarifies the expected behavior." in prompt
+        assert "Human reviewer explains a caller constraint." in prompt
         assert github_client.inline_comments == []
         assert pr.as_issue().created_comments == []
         assert github_client.resolved_thread_ids == []
@@ -2565,7 +2570,7 @@ def test_panel_prior_thread_dispositions_control_resolution_and_approval(
     )
     monkeypatch.setattr(workflow, "_panel_diff", lambda *args: "pinned diff")
     monkeypatch.setattr(
-        "cli.workflows.review_workflow.execute_tool", lambda *args, **kwargs: "value = 1\n"
+        "cli.workflows.review_workflow.read_file_at_revision", lambda *args, **kwargs: "value = 1\n"
     )
     approvals = _patch_approval(monkeypatch)
     result = workflow.process_review(7)

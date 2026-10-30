@@ -10,7 +10,7 @@ import pytest
 from cli.core.config import ReviewConfig
 from cli.core.exceptions import DotBotExecutionError, ReviewContractError
 from cli.core.models import PriorDotBotReviewComment
-from cli.review.coordinator import PanelTurn, ReviewCoordinator
+from cli.review.coordinator import PANEL_INSTRUCTIONS, PanelTurn, ReviewCoordinator
 
 
 def _config(tmp_path: Path, *, policy: str = "unanimous") -> ReviewConfig:
@@ -326,11 +326,16 @@ def test_shared_client_is_rejected(tmp_path: Path) -> None:
         ReviewCoordinator(_config(tmp_path), lambda config: cast(Any, client))
 
 
-def test_duplicates_preserve_highest_severity_and_redact_published_content(tmp_path: Path) -> None:
+@pytest.mark.parametrize("emojis", [("", ""), ("⚪ ", "🔴 "), ("⚪️ ", "🔴 ")])
+def test_duplicates_preserve_highest_severity_and_redact_published_content(
+    tmp_path: Path,
+    emojis: tuple[str, str],
+) -> None:
     def handler(prompt: str, kwargs: dict[str, Any]) -> str:
         if not _history(prompt):
             priority = 3 if kwargs["model_name"] == "primary" else 1
-            finding = _finding(tmp_path, title=f"[P{priority}] Validate authorization")
+            emoji = emojis[0] if kwargs["model_name"] == "primary" else emojis[1]
+            finding = _finding(tmp_path, title=f"{emoji}[P{priority}] Validate authorization")
             finding["priority"] = priority
             finding["body"] += " SECRET-GITHUB"
             return _turn(findings=[finding])
@@ -342,3 +347,16 @@ def test_duplicates_preserve_highest_severity_and_redact_published_content(tmp_p
     assert result.findings[0].priority == 1
     assert "SECRET-GITHUB" not in result.findings[0].body
     assert "[REDACTED]" in result.findings[0].body
+
+
+@pytest.mark.parametrize("priority", [2, 3])
+def test_panel_policy_overrides_nonblocking_verdict_guidance(tmp_path: Path, priority: int) -> None:
+    finding = _finding(tmp_path)
+    finding["priority"] = priority
+    assert "override the general guidelines' severity-based correctness rule" in PANEL_INSTRUCTIONS
+    with pytest.raises(ReviewContractError, match="contradicts retained findings"):
+        PanelTurn.parse(_turn(findings=[finding], correct=True), set())
+    assert (
+        PanelTurn.parse(_turn(findings=[finding]), set()).review.overall_correctness
+        == "patch is incorrect"
+    )

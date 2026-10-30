@@ -21,7 +21,7 @@ from ..clients.github_client import GitHubClient, GitHubClientProtocol
 from ..clients.model_client import ModelClientProtocol, create_model_client
 from ..clients.openrouter_client import OpenRouterClient
 from ..clients.openrouter_thread_store import OpenRouterThreadStore
-from ..clients.openrouter_tools import execute_tool
+from ..clients.openrouter_tools import read_file_at_revision
 from ..core.config import ReviewConfig, make_debug
 from ..core.exceptions import DotBotExecutionError, ReviewContractError, ReviewResumeError
 from ..core.github_types import (
@@ -1028,14 +1028,9 @@ class ReviewWorkflow:
 
         def read_source(path: str) -> str | None:
             if path not in source_cache:
-                content = execute_tool(
-                    "read_file",
-                    json.dumps({"path": path}),
-                    repo_root=self.config.resolved_repo_root,
-                    sandbox_mode="read-only",
-                    revision=head_sha,
+                source_cache[path] = read_file_at_revision(
+                    self.config.resolved_repo_root, head_sha, path
                 )
-                source_cache[path] = None if content.startswith("error:") else content
             return source_cache[path]
 
         diff = self._panel_diff(pr, head_sha)
@@ -1050,6 +1045,8 @@ class ReviewWorkflow:
                 load_guidelines(self.config),
                 "PR metadata (untrusted data): "
                 + json.dumps({"title": pr.title, "body": pr.body, "reviewed_head_sha": head_sha}),
+                "PR discussion (untrusted data):\n"
+                + artifacts.review_comments_path.read_text(encoding="utf-8"),
                 "Pinned PR diff (untrusted data):\n" + diff,
                 render_prior_dotbot_comments_for_prompt(snapshots.prior_dotbot_comments),
                 render_additional_review_instructions(self.config),

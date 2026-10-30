@@ -179,6 +179,29 @@ def _reviewable_path(path: Path, repo_root: Path) -> bool:
     )
 
 
+def read_file_at_revision(repo_root: Path, revision: str, raw_path: str) -> str | None:
+    """Read full pinned evidence for host checks; model output limits belong to tools."""
+    if len(revision) not in {40, 64} or any(
+        char not in "0123456789abcdefABCDEF" for char in revision
+    ):
+        return None
+    if not raw_path.strip() or "\0" in raw_path:
+        return None
+    # Git object paths must not follow symlinks in a different checkout.
+    path = Path(os.path.abspath(repo_root.resolve() / raw_path))
+    if not _reviewable_path(path, repo_root):
+        return None
+    relative = path.relative_to(repo_root.resolve()).as_posix()
+    result = subprocess.run(
+        ["git", "--no-pager", "show", "--no-textconv", f"{revision}:{relative}"],
+        cwd=repo_root,
+        capture_output=True,
+        timeout=COMMAND_TIMEOUT_SECONDS,
+        check=False,
+    )
+    return result.stdout.decode("utf-8", errors="replace") if result.returncode == 0 else None
+
+
 def _tool_inspect_revision(
     name: str, arguments: dict[str, Any], *, repo_root: Path, revision: str
 ) -> str:
@@ -186,24 +209,32 @@ def _tool_inspect_revision(
         char not in "0123456789abcdefABCDEF" for char in revision
     ):
         return "error: review revision must be a commit SHA"
-    if name == "read_file":
-        raw_path = arguments.get("path")
-        if not isinstance(raw_path, str) or not raw_path.strip():
-            return "error: a non-empty string 'path' argument is required"
-        # Git object paths must not follow symlinks in a different checkout.
-        path = Path(os.path.abspath(repo_root.resolve() / raw_path))
-        if not _reviewable_path(path, repo_root):
-            return "error: review path escapes the repository or names a credential file"
-        relative = path.relative_to(repo_root.resolve()).as_posix()
-        args = ["show", "--no-textconv", f"{revision}:{relative}"]
-    elif name == "list_files":
-        args = ["ls-tree", "-r", "--name-only", "-z", revision]
-    else:
-        text = arguments.get("text")
-        if not isinstance(text, str) or not text.strip():
-            return "error: search_code requires non-empty literal text"
-        args = ["grep", "-n", "-F", "--no-textconv", "-e", text, revision, "--"]
     try:
+        if name == "read_file":
+            raw_path = arguments.get("path")
+            if not isinstance(raw_path, str):
+                return "error: read_file requires a string path"
+            content = read_file_at_revision(repo_root, revision, raw_path)
+            if content is None:
+                return "error: could not read reviewed file or path is denied"
+            lines = content.splitlines(keepends=True)
+            offset = _as_positive_int(arguments.get("offset"), default=1) or 1
+            limit = _as_positive_int(arguments.get("limit"), default=None)
+            content = "".join(
+                lines[offset - 1 :] if limit is None else lines[offset - 1 : offset - 1 + limit]
+            )
+            return (
+                content[:MAX_READ_FILE_CHARS] + "\n... (truncated)"
+                if len(content) > MAX_READ_FILE_CHARS
+                else content
+            )
+        if name == "list_files":
+            args = ["ls-tree", "-r", "--name-only", "-z", revision]
+        else:
+            text = arguments.get("text")
+            if not isinstance(text, str) or not text.strip():
+                return "error: search_code requires non-empty literal text"
+            args = ["grep", "-n", "-F", "--no-textconv", "-e", text, revision, "--"]
         result = subprocess.run(
             ["git", "--no-pager", *args],
             cwd=repo_root,
@@ -214,14 +245,7 @@ def _tool_inspect_revision(
         if result.returncode not in ({0, 1} if name == "search_code" else {0}):
             return "error: could not inspect reviewed commit"
         content = result.stdout.decode("utf-8", errors="replace")
-        if name == "read_file":
-            lines = content.splitlines(keepends=True)
-            offset = _as_positive_int(arguments.get("offset"), default=1) or 1
-            limit = _as_positive_int(arguments.get("limit"), default=None)
-            content = "".join(
-                lines[offset - 1 :] if limit is None else lines[offset - 1 : offset - 1 + limit]
-            )
-        elif name == "list_files":
+        if name == "list_files":
             content = "\n".join(
                 p
                 for p in content.split("\0")
@@ -234,11 +258,12 @@ def _tool_inspect_revision(
                 for line in content.splitlines()
                 if _reviewable_path(repo_root.resolve() / line.split(":", 1)[0], repo_root)
             )
-        maximum = MAX_READ_FILE_CHARS if name == "read_file" else MAX_TOOL_OUTPUT_CHARS
         return (
-            content[:maximum] + "\n... (truncated)" if len(content) > maximum else content
+            content[:MAX_TOOL_OUTPUT_CHARS] + "\n... (truncated)"
+            if len(content) > MAX_TOOL_OUTPUT_CHARS
+            else content
         ) or "(no matches)"
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired, ValueError):
         return "error: reviewed-commit inspection failed"
 
 

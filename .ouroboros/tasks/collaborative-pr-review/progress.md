@@ -53,14 +53,14 @@ Outcome: 155 passed in 1.98s. No baseline failures in that subset.
 - `uv sync --dev --locked`: passed after updating only certifi 2026.1.4 →
   2026.10.23, cryptography 46.0.5 → 50.0.2, pyjwt 2.11.0 → 2.15.1, and
   urllib3 2.6.3 → 2.8.0 in uv.lock.
-- `uv run pytest -q`: 871 passed in 9.12s after dependency remediation and
-  the trusted-action bootstrap compatibility regression.
+- `uv run pytest -q`: 878 passed in 9.63s after the automated-review fixes,
+  dependency remediation, and trusted-action bootstrap regression.
 - `uvx --from actionlint-py==1.7.12.25 actionlint -ignore 'unexpected key "queue" for "concurrency" section'`: passed.
 - `git diff --check`: passed.
 - Local Trivy 0.74.0 scan (vuln,misconfig,secret; HIGH,CRITICAL; .venv skipped):
   exit 0, zero vulnerability/misconfiguration/secret findings after remediation
   (previously 14 vulnerability advisories). No ignore rules or unrelated upgrades
-  added. Report: /tmp/dotbot-trivy-remediated.json.
+  added. Latest post-review rerun also exited 0; report: /tmp/dotbot-trivy-reviewed.json.
 
 ## Acceptance criteria
 
@@ -70,6 +70,20 @@ Automated review monitoring continues via `gh pr checks 14`. See tests/test_revi
 tests/test_review_inspection.py, tests/test_review_workflow.py,
 tests/test_model_config.py, tests/test_dotbot_workflow_model_vars.py,
 tests/test_approval.py, and tests/test_ci_security.py.
+
+## Automated review follow-up
+
+- Isolated the roster script with `python3 -I` and proved PR-supplied yaml.py
+  and pathlib.py cannot execute.
+- Shared a full pinned-file reader between host evidence checks and bounded
+  model tools; prior findings beyond 100,000 characters remain in the ledger.
+- Included captured human PR discussion as explicitly untrusted panel context.
+- Normalized priority emojis (including variation selectors) during exact dedupe.
+- Clarified that the approved panel verdict policy overrides the general
+  severity-based verdict guideline: retained P2/P3 issues still block approval.
+  Regression tests preserve that intentional contract rather than weaken it.
+- Both automated reviewers reported duplicate instances of these issues; replies
+  and thread resolution follow after the fix commit is pushed.
 
 ## Changed paths
 

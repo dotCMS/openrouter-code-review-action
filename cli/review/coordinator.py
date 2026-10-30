@@ -74,8 +74,11 @@ agreement from silence. Revisit challenged assumptions and inspect code again
 when necessary. In findings return ONLY genuinely new issues, not copies or
 paraphrases of ledger issues. To revise an issue, reject its old ID and propose
 the replacement. Return carried_forward as []: prior comments already have ledger
-IDs and must receive dispositions like other issues. An issue you retain or add
-requires overall_correctness='patch is incorrect'. If no issues remain but you
+IDs and must receive dispositions like other issues. These panel verdict rules
+override the general guidelines' severity-based correctness rule: ANY retained
+or new issue, including P2/P3, requires overall_correctness='patch is incorrect'.
+Only retract an issue when evidence shows it is not actionable, not to gain approval.
+If no issues remain but you
 still dissent, explain the unresolved blocker in overall_explanation.
 """
 
@@ -290,7 +293,9 @@ class ReviewCoordinator:
         # shortcut: exact text/location dedupe only; add semantic grouping if paraphrased duplicates become noisy.
         key = json.dumps(
             {
-                "title": re.sub(r"^\[P[0-3]\]\s*", "", finding.title.strip()).casefold(),
+                "title": re.sub(
+                    r"^(?:[🔴🟡⚪]\ufe0f?)?\s*\[P[0-3]\]\s*", "", finding.title.strip()
+                ).casefold(),
                 "body": finding.body.strip(),
                 "location": finding.code_location.as_dict(),
                 "side": finding.side or "RIGHT",
