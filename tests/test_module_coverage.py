@@ -807,7 +807,7 @@ def test_review_action_uses_expected_model_and_drops_legacy_resume_cache() -> No
     # The review preview executes one explicitly validated immutable candidate,
     # never the incoming PR SHA. Act remains on the maintainer-controlled tag.
     expected = {
-        "review": "9f5e3e6fdaf180609f8c2045f40e8eb8fbd824e5",
+        "review": "1b7b63080adb8fceac3d15ae3a011946cdd1fbd5",
         "act": "latest",
     }
     for job_name, source in (("review", review_workflow), ("act", act_workflow)):
