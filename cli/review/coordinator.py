@@ -276,9 +276,13 @@ class ReviewCoordinator:
         )
 
     def _register_finding(self, finding: ReviewFinding) -> str:
-        path = Path(finding.code_location.absolute_file_path)
-        path = Path(os.path.abspath(self.config.resolved_repo_root / path))
-        if not path.is_relative_to(self.config.resolved_repo_root.resolve()):
+        raw = finding.code_location.absolute_file_path
+        root = self.config.resolved_repo_root
+        path = Path(os.path.abspath(root / raw))
+        if not path.is_relative_to(root.resolve()):
+            # Models sometimes emit a foreign absolute path (e.g. /README.md); read it as repo-relative.
+            path = Path(os.path.abspath(root / raw.lstrip("/")))
+        if not path.is_relative_to(root.resolve()):
             raise ReviewContractError("Panel finding path escapes the repository")
         if (
             not finding.title.strip()

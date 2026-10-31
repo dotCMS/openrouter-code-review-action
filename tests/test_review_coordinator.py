@@ -183,6 +183,34 @@ def test_distinct_issues_at_same_line_are_not_collapsed(tmp_path: Path) -> None:
     assert len(_run(panel, tmp_path).findings) == 2
 
 
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [("/src.py", "src.py"), ("/github/workspace/a.py", "github/workspace/a.py")],
+)
+def test_foreign_absolute_finding_path_is_read_as_repo_relative(
+    tmp_path: Path, raw: str, expected: str
+) -> None:
+    finding = _finding(tmp_path)
+    finding["code_location"]["absolute_file_path"] = raw
+
+    def handler(prompt: str, kwargs: dict[str, Any]) -> str:
+        if not _history(prompt):
+            return _turn(findings=[finding])
+        return _turn(votes={item["issue_id"]: True for item in _ledger(prompt)})
+
+    panel, _ = _panel(_config(tmp_path), handler)
+    [result] = _run(panel, tmp_path).findings
+    assert result.code_location.absolute_file_path == str(tmp_path.resolve() / expected)
+
+
+def test_traversal_finding_path_still_fails_closed(tmp_path: Path) -> None:
+    finding = _finding(tmp_path)
+    finding["code_location"]["absolute_file_path"] = "../outside.py"
+    panel, _ = _panel(_config(tmp_path), lambda prompt, kwargs: _turn(findings=[finding]))
+    with pytest.raises(ReviewContractError, match="escapes the repository"):
+        _run(panel, tmp_path)
+
+
 def test_lead_can_reject_disputed_finding_after_evidence_based_adjudication(tmp_path: Path) -> None:
     def handler(prompt: str, kwargs: dict[str, Any]) -> str:
         if not _history(prompt):
