@@ -94,9 +94,9 @@ Ignore non-blocking issues such as style, formatting, typos, documentation, and 
 
 Non‑speculative verdict rule:
 
-- Only set `overall_correctness` to "patch is incorrect" when you have identified at least one P0 or P1 bug introduced by this patch, supported by concrete evidence found in this repository (the diff, repo files, or explicit PR context). 
+- Set `overall_correctness` to "patch is incorrect" whenever any actionable finding or prior issue remains retained, including P2/P3. "Patch is correct" requires no retained or new findings. Every finding must have concrete evidence in this repository (the diff, repo files, or explicit PR context).
 - Do not mark a patch as incorrect based on assumptions or unverifiable external facts (e.g., model names or versions, third‑party APIs, service availability, undocumented policies, or behaviors that could have changed after your knowledge cutoff) unless the repository itself proves the issue.
-- If a concern depends on uncertainty or potential knowledge‑cutoff gaps, lower the confidence and do not escalate the verdict. Either omit the finding or include it as a low‑priority [P3] risk with explicit "Assumption:" and "What to verify:" lines, while keeping `overall_correctness` as "patch is correct".
+- If a concern depends on uncertainty or potential knowledge‑cutoff gaps, do not invent a finding. Omit it unless repository evidence establishes an actionable issue. A reported P3 still counts as a retained issue and requires `overall_correctness` to be "patch is incorrect".
 
 ## 8. Review Comment Format & Suggestion Rules
 

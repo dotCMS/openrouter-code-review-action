@@ -33,5 +33,5 @@ class ReviewContractError(DotBotReviewError):
     """Structured review payload or metadata contract violations."""
 
 
-class ReviewResumeError(DotBotReviewError):
-    """Review resume invariant or infrastructure failures."""
+class CorrectableReviewError(ReviewContractError):
+    """A response error whose validated decisions can be preserved during correction."""

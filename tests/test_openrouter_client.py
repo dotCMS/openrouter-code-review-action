@@ -11,7 +11,12 @@ from cli.clients.model_client import ModelClientProtocol, create_model_client
 from cli.clients.openrouter_client import OpenRouterClient
 from cli.clients.openrouter_thread_store import OpenRouterThreadStore
 from cli.core.config import ReviewConfig
-from cli.core.exceptions import ConfigurationError, DotBotExecutionError
+from cli.core.exceptions import (
+    ConfigurationError,
+    CorrectableReviewError,
+    DotBotExecutionError,
+    ReviewContractError,
+)
 
 
 def _config(tmp_path: Path, **overrides: Any) -> ReviewConfig:
@@ -178,6 +183,115 @@ def test_execute_structured_returns_schema_turn_output(tmp_path: Path) -> None:
     saved = _load_single_thread(tmp_path)
     assert saved is not None
     assert saved[-1] == {"role": "assistant", "content": review_json}
+
+
+def test_structured_correction_reuses_full_investigation_without_more_tools(tmp_path: Path) -> None:
+    (tmp_path / "evidence.txt").write_text("full-source-evidence\n")
+    valid = '{"ok": true}'
+    transport = _ScriptedTransport(
+        [
+            _tool_response("read-1", "read_file", '{"path":"evidence.txt"}'),
+            _text_response("Investigation complete"),
+            _text_response("invalid JSON"),
+            _text_response(valid),
+        ]
+    )
+
+    def validate(output: str) -> None:
+        if output != valid:
+            raise CorrectableReviewError("Expected valid JSON")
+
+    result = _client(tmp_path, transport).execute_structured(
+        "original full context",
+        output_schema={"type": "object"},
+        output_validator=validate,
+    )
+    assert result == valid
+    assert len(transport.payloads) == 4
+    first, repair = transport.payloads[2:]
+    assert repair["messages"][:-2] == first["messages"]
+    assert repair["messages"][-2] == {"role": "assistant", "content": "invalid JSON"}
+    assert "only correction attempt" in repair["messages"][-1]["content"]
+    assert "tools" not in repair
+    assert (
+        next(m["content"] for m in repair["messages"] if m["role"] == "tool")
+        == "full-source-evidence\n"
+    )
+    saved = _load_single_thread(tmp_path)
+    assert saved is not None
+    assert saved[-1]["content"] == valid
+    assert any(m["content"] == "invalid JSON" for m in saved)
+
+
+def test_structured_correction_stops_after_second_invalid_response(tmp_path: Path) -> None:
+    transport = _ScriptedTransport(
+        [
+            _text_response("Investigation complete"),
+            _text_response("bad first"),
+            _text_response("bad second"),
+        ]
+    )
+
+    def reject(output: str) -> None:
+        raise CorrectableReviewError("Still invalid")
+
+    with pytest.raises(ReviewContractError, match="Still invalid"):
+        _client(tmp_path, transport).execute_structured(
+            "review",
+            output_schema={"type": "object"},
+            output_validator=reject,
+        )
+    assert len(transport.payloads) == 3
+    saved = _load_single_thread(tmp_path)
+    assert saved is not None and saved[-1]["content"] == "bad second"
+
+
+@pytest.mark.parametrize("fail_at", [1, 2])
+@pytest.mark.parametrize(
+    "error", [DotBotExecutionError("provider failed"), ReviewContractError("bad request")]
+)
+def test_execution_errors_do_not_trigger_output_correction(
+    tmp_path: Path, fail_at: int, error: Exception
+) -> None:
+    calls = 0
+
+    def transport(payload: dict[str, Any]) -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        if calls == fail_at:
+            raise error
+        return _text_response("Investigation complete")
+
+    client = OpenRouterClient(
+        _config(tmp_path),
+        transport=transport,
+        thread_store=OpenRouterThreadStore(tmp_path / "threads"),
+    )
+    with pytest.raises(type(error)):
+        client.execute_structured(
+            "review", output_schema={"type": "object"}, output_validator=lambda output: None
+        )
+    assert calls == fail_at
+
+
+def test_output_correction_does_not_reset_the_model_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    now = [0.0]
+    monkeypatch.setattr("cli.clients.openrouter_client.time.monotonic", lambda: now[0])
+    transport = _ScriptedTransport([_text_response("Investigated"), _text_response("bad JSON")])
+
+    def reject(output: str) -> None:
+        now[0] = 2.0
+        raise CorrectableReviewError("Invalid JSON")
+
+    with pytest.raises(DotBotExecutionError, match="timeout reached before output correction"):
+        _client(tmp_path, transport, model_timeout_seconds=1).execute_structured(
+            "review",
+            output_schema={"type": "object"},
+            output_validator=reject,
+        )
+    assert len(transport.payloads) == 2
 
 
 def test_execute_structured_empty_output_raises(tmp_path: Path) -> None:

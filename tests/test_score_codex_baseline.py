@@ -535,6 +535,20 @@ def test_score_pr_skipped_when_head_sha_drifts(tmp_path: Path):
     assert "registry pins" in (result.notes or "")
 
 
+@pytest.mark.parametrize("captured_head", ["actual-pr-head", None, 0])
+def test_merge_metadata_cannot_bypass_the_labeled_revision_guard(tmp_path: Path, captured_head):
+    pr = scorer._SamplePR(id="sample-pr-001", head_sha="historical-merge")
+    artifact = _codex_artifact(
+        pr_id=pr.id, head_sha="actual-pr-head", capture_status="captured", findings=[_raw_finding()]
+    )
+    artifact["head_sha"] = captured_head
+    artifact["merge_sha"] = pr.head_sha
+    _write_codex_artifact(tmp_path, pr.id, artifact)
+    result = scorer.score_pr(pr, _dataset([_make_labeled()]), runs_dir=tmp_path)
+    assert result.status == "skipped"
+    assert result.aggregate["total"] == 0
+
+
 def test_score_pr_scores_captured_artifact_with_overlap_match(tmp_path: Path):
     pr = scorer._SamplePR(id="sample-pr-001", head_sha="deadbeefcafe1234")
     finding = _raw_finding(path="src/app.py", start=10, end=12)

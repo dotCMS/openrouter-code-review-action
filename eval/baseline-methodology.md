@@ -208,6 +208,23 @@ is the tiebreaker:
 
 ### 4.1 Per-PR run protocol
 
+The protocol below describes the historical single-agent parity benchmark. In v2,
+OpenRouter captures exercise the collaborative production coordinator, while Codex
+captures call the SDK directly, read-only, with pinned PR head/base and shared
+review guidelines. Their orchestration and prompt context differ; new captures
+are end-to-end workflow comparisons, not evidence of same-prompt parity. Both
+runners retain dry-run/no-publication behavior. These captures record runner
+version `2`; historical artifacts are not refreshed automatically (use `--force`
+for an intentional paid recapture).
+
+The registry's legacy `head_sha` is the merge revision used by the existing
+human-labeled corpus; it is preserved, not silently relabeled. New captures use
+explicit `pr_head_sha` and `pr_base_sha` verified against GitHub PR metadata and
+record the original merge separately. OpenRouter additionally requires the live
+PR snapshot to still match both pinned revisions. Historical merge-based labels
+must be revalidated before scoring new PR-head captures; the scorer continues to
+reject different (or missing) captured revisions.
+
 For each PR in `sample-prs.yaml`:
 
 1. **Pin the head SHA.** Check out `head_sha` exactly. Do not

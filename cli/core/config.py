@@ -14,6 +14,7 @@ from .model_config import (
     DEFAULT_REVIEW_MODEL,
     ModelConfig,
     load_model_config,
+    validate_panel_options,
 )
 
 _CONFIG_OVERRIDE_KEYS = frozenset(
@@ -29,6 +30,8 @@ _CONFIG_OVERRIDE_KEYS = frozenset(
         "model_name",
         "review_model",
         "review_models",
+        "review_discussion_rounds",
+        "review_decision_policy",
         "act_model",
         "config_path",
         "reasoning_effort",
@@ -73,6 +76,8 @@ class _ReviewConfigValues(TypedDict):
     model_name: str
     review_model: str
     review_models: tuple[str, ...]
+    review_discussion_rounds: int
+    review_decision_policy: str
     act_model: str
     config_path: str
     reasoning_effort: str
@@ -103,6 +108,8 @@ class ReviewConfig:
     model_name: str = "gpt-5.4"
     review_model: str = DEFAULT_REVIEW_MODEL
     review_models: tuple[str, ...] = ()
+    review_discussion_rounds: int = 2
+    review_decision_policy: str = "unanimous"
     act_model: str = DEFAULT_ACT_MODEL
     config_path: str = DEFAULT_CONFIG_PATH
     reasoning_effort: str = "medium"
@@ -118,7 +125,7 @@ class ReviewConfig:
     context_dir_name: str = ".dotbot-context"
     allowed_commenter_associations: tuple[str, ...] = _DEFAULT_ALLOWED_COMMENTER_ASSOCIATIONS
     # PAT owned by the machine user (e.g. dotCMS-Machine-User); when set and
-    # every reviewer model agrees the patch is correct, the PR is approved as
+    # the final review decision accepts the patch, the PR is approved as
     # that user. Empty disables auto-approval.
     github_approval_token: str = ""
     # When True, prior unresolved dotbot threads that the reviewer model saw
@@ -181,6 +188,8 @@ class ReviewConfig:
         if self.mode == "review" and self.pr_number is None:
             raise ConfigurationError("PR number is required in review mode")
 
+        validate_panel_options(self.review_discussion_rounds, self.review_decision_policy)
+
         if self.debug_level < 0:
             raise ConfigurationError("Debug level must be non-negative")
 
@@ -191,6 +200,11 @@ class ReviewConfig:
             raise ConfigurationError(
                 f"Invalid web_search_mode: {self.web_search_mode}. "
                 "Must be 'disabled', 'cached', or 'live'"
+            )
+
+        if self.mode == "review" and self.model_provider == "openai":
+            raise ConfigurationError(
+                "Review mode requires OpenRouter; pin a v1 release for the old review provider"
             )
 
         if self.model_provider == "openrouter":
@@ -276,7 +290,7 @@ class ReviewConfig:
     @property
     def resolved_repo_root(self) -> Path:
         """Return the configured repository root, defaulting to the current directory."""
-        return self.repo_root or Path(".").resolve()
+        return (self.repo_root or Path(".")).resolve()
 
     @property
     def resolved_context_dir_name(self) -> str:
@@ -301,7 +315,7 @@ class ReviewConfig:
         """Return the complete reviewer model roster for review mode.
 
         Order: the primary :attr:`review_model` first, then any extra
-        :attr:`review_models` (the multi-model "fight" roster from
+        :attr:`review_models` (the collaborative panel roster from
         ``review.models`` in the in-repo config or ``DOTBOT_REVIEW_MODELS``).
         Deduplicated, preserving order.
         """
@@ -394,6 +408,8 @@ def _config_values_from_environment() -> _ReviewConfigValues:
         "review_model": os.environ.get("OPENROUTER_REVIEW_MODEL", DEFAULT_REVIEW_MODEL).strip()
         or DEFAULT_REVIEW_MODEL,
         "review_models": _parse_model_list(os.environ.get("DOTBOT_REVIEW_MODELS", "")),
+        "review_discussion_rounds": 2,
+        "review_decision_policy": "unanimous",
         "act_model": os.environ.get("OPENROUTER_ACT_MODEL", DEFAULT_ACT_MODEL).strip()
         or DEFAULT_ACT_MODEL,
         "config_path": os.environ.get("OPENROUTER_REVIEW_CONFIG", DEFAULT_CONFIG_PATH).strip()
@@ -443,6 +459,10 @@ def _apply_in_repo_model_config(values: _ReviewConfigValues, *, explicit_keys: s
         values["review_model"] = file_config.review_model
     if "review_models" not in explicit_keys and file_config.review_models:
         values["review_models"] = file_config.review_models
+    if "review_discussion_rounds" not in explicit_keys:
+        values["review_discussion_rounds"] = file_config.review_discussion_rounds
+    if "review_decision_policy" not in explicit_keys:
+        values["review_decision_policy"] = file_config.review_decision_policy
     if "act_model" not in explicit_keys:
         values["act_model"] = file_config.act_model
 
@@ -509,6 +529,11 @@ def _apply_config_overrides(values: _ReviewConfigValues, kwargs: Mapping[str, An
             values["review_models"] = tuple(
                 str(model).strip() for model in review_models if str(model).strip()
             )
+
+    if "review_discussion_rounds" in kwargs and kwargs["review_discussion_rounds"] is not None:
+        values["review_discussion_rounds"] = kwargs["review_discussion_rounds"]
+    if "review_decision_policy" in kwargs and kwargs["review_decision_policy"] is not None:
+        values["review_decision_policy"] = kwargs["review_decision_policy"]
 
     act_model = kwargs.get("act_model")
     if act_model is not None:

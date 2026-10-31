@@ -1,18 +1,14 @@
-from __future__ import annotations
+from pathlib import Path
 
-from typing import Any, cast
+import pytest
 
 from cli.core.config import ReviewConfig
-from cli.review.review_prompt import load_guidelines
-from cli.workflows.review_workflow import ReviewWorkflow
+from cli.core.exceptions import PromptError
+from cli.review.review_prompt import load_guidelines, load_panel_instructions
 
 
 def _make_review_config() -> ReviewConfig:
-    return ReviewConfig(
-        github_token="token",
-        repository="owner/repo",
-        mode="review",
-    )
+    return ReviewConfig(github_token="token", repository="owner/repo", mode="review")
 
 
 def test_load_guidelines_include_repo_standard_comment_format() -> None:
@@ -34,28 +30,18 @@ def test_load_guidelines_include_repo_standard_comment_format() -> None:
     assert '"code_location": {' in guidelines
 
 
-def test_review_base_instructions_mark_repo_standard_as_authoritative() -> None:
-    workflow = ReviewWorkflow(
-        _make_review_config(),
-        github_client=cast(Any, object()),
-        model_client=cast(Any, object()),
-    )
-
-    instructions = workflow._build_review_base_instructions("dummy")
-
-    assert "REVIEW COMMENT FORMAT (REPO STANDARD)" in instructions
-    assert "authoritative" in instructions
+def test_panel_prompt_is_loaded_from_editable_markdown() -> None:
+    expected = Path("prompts/review_panel.md").read_text(encoding="utf-8")
+    assert load_panel_instructions(_make_review_config()) == expected
+    assert "REVIEW COMMENT FORMAT (REPO STANDARD)" in expected
+    assert "untrusted evidence" in expected
+    assert "P2/P3" in expected
 
 
-def test_review_base_instructions_do_not_duplicate_additional_prompt() -> None:
-    config = _make_review_config()
-    config.additional_prompt = "Custom instruction"
-    workflow = ReviewWorkflow(
-        config,
-        github_client=cast(Any, object()),
-        model_client=cast(Any, object()),
-    )
+def test_missing_prompt_fails_fast(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail(*args: object, **kwargs: object) -> str:
+        raise OSError("missing")
 
-    instructions = workflow._build_review_base_instructions("dummy")
-
-    assert "Custom instruction" not in instructions
+    monkeypatch.setattr(Path, "read_text", fail)
+    with pytest.raises(PromptError, match="review_panel.md"):
+        load_panel_instructions(_make_review_config())

@@ -44,7 +44,16 @@ DEFAULT_ACT_MODEL = "anthropic/claude-opus-4.7"
 
 _VALID_REASONING_EFFORTS = frozenset({"minimal", "low", "medium", "high"})
 _VALID_WEB_SEARCH_MODES = frozenset({"disabled", "cached", "live"})
-_KNOWN_MODE_KEYS = frozenset({"model", "models", "reasoning_effort", "web_search_mode"})
+_KNOWN_MODE_KEYS = frozenset(
+    {"model", "models", "reasoning_effort", "web_search_mode", "discussion_rounds", "decision"}
+)
+
+
+def validate_panel_options(rounds: object, policy: object) -> None:
+    if type(rounds) is not int or not 1 <= rounds <= 5:
+        raise ConfigurationError("review.discussion_rounds must be an integer from 1 to 5")
+    if not isinstance(policy, str) or policy not in {"unanimous", "lead"}:
+        raise ConfigurationError("review.decision.policy must be 'unanimous' or 'lead'")
 
 
 @dataclass(frozen=True)
@@ -63,6 +72,8 @@ class ModelConfig:
 
     review_model: str = DEFAULT_REVIEW_MODEL
     review_models: tuple[str, ...] = ()
+    review_discussion_rounds: int = 2
+    review_decision_policy: str = "unanimous"
     act_model: str = DEFAULT_ACT_MODEL
     review_reasoning_effort: str | None = None
     act_reasoning_effort: str | None = None
@@ -131,6 +142,8 @@ def load_model_config(
     return ModelConfig(
         review_model=review_block.get("model") or DEFAULT_REVIEW_MODEL,
         review_models=tuple(review_block.get("models") or ()),
+        review_discussion_rounds=review_block.get("discussion_rounds", 2),
+        review_decision_policy=review_block.get("decision", {}).get("policy", "unanimous"),
         act_model=act_block.get("model") or DEFAULT_ACT_MODEL,
         review_reasoning_effort=review_block.get("reasoning_effort"),
         act_reasoning_effort=act_block.get("reasoning_effort"),
@@ -154,6 +167,15 @@ def _coerce_mode_block(value: Any, mode: str, source: Path) -> dict[str, Any]:
         )
 
     block: dict[str, Any] = {}
+    if mode != "review" and {"discussion_rounds", "decision"}.intersection(value):
+        raise ConfigurationError("discussion_rounds and decision are only valid under review")
+    decision = value.get("decision", {})
+    if not isinstance(decision, dict) or set(decision) - {"policy"}:
+        raise ConfigurationError("review.decision must be a mapping containing only policy")
+    rounds = value.get("discussion_rounds", 2)
+    validate_panel_options(rounds, decision.get("policy", "unanimous"))
+    block["discussion_rounds"] = rounds
+    block["decision"] = decision
 
     model = value.get("model")
     if model is not None:

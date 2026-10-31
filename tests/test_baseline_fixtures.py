@@ -174,7 +174,7 @@ def test_codex_findings_mirror_present(pr_number: int) -> None:
     capture = payload["capture"]
     assert isinstance(capture, dict)
     assert capture["status"] in {"captured", "pending", "failed"}
-    assert capture["runner_version"] == "1"
+    assert capture["runner_version"] in {"1", "2"}
     source = payload["source"]
     assert isinstance(source, dict)
     assert source["produced_by"] == "eval.run_codex_baseline"

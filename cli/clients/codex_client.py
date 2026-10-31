@@ -116,6 +116,7 @@ class CodexClient:
         *,
         output_schema: dict[str, object],
         schema_prompt: str = "Produce the JSON output now.",
+        output_validator: Callable[[str], object] | None = None,
         model_name: str | None = None,
         reasoning_effort: str | None = None,
         suppress_stream: bool = False,
@@ -123,7 +124,7 @@ class CodexClient:
         resume_thread_id: str | None = None,
     ) -> str:
         """Run an agentic turn followed by a schema-enforced output turn."""
-        return self._run_session(
+        output = self._run_session(
             model_name=model_name,
             reasoning_effort=reasoning_effort,
             suppress_stream=suppress_stream,
@@ -138,6 +139,9 @@ class CodexClient:
                 stream_enabled=stream_enabled,
             ),
         )
+        if output_validator is not None:
+            output_validator(output)
+        return output
 
     def _run_session(
         self,

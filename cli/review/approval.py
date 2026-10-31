@@ -43,8 +43,14 @@ class ApprovalOutcome:
     reason: str = ""
 
 
-def build_approval_body(models: list[str]) -> str:
-    """Render the approval review body for the given reviewer roster."""
+def build_approval_body(models: list[str], *, policy: str = "unanimous") -> str:
+    """Render the decision without claiming unanimity under lead adjudication."""
+    if policy == "lead":
+        return (
+            f"✅ dotbot review: lead reviewer ({models[0]}) adjudicated the panel "
+            f"({', '.join(models)}) — **patch is correct**.\n\n"
+            f"<sub>{APPROVAL_MARKER}</sub>"
+        )
     return APPROVAL_BODY_TEMPLATE.format(models=", ".join(models))
 
 
@@ -89,6 +95,7 @@ def submit_pr_approval(
     repository: str,
     pr_number: int,
     head_sha: str,
+    base_sha: str,
     token: str,
     body: str,
     debug: Callable[[int, str], None],
@@ -114,6 +121,14 @@ def submit_pr_approval(
         raise GitHubAPIError(
             f"failed to load {repository}#{pr_number} for approval: {exc}"
         ) from exc
+
+    if pr.head.sha != head_sha:
+        debug(1, "PR head changed before approval submission; rerun the review")
+        return ApprovalOutcome(submitted=False, login=login, reason="head_changed")
+
+    if pr.base is None or pr.base.sha != base_sha:
+        debug(1, "PR base changed before approval submission; rerun the review")
+        return ApprovalOutcome(submitted=False, login=login, reason="base_changed")
 
     try:
         if _approval_exists(pr.get_reviews(), login=login, head_sha=head_sha):

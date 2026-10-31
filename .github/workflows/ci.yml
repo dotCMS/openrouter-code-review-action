@@ -9,6 +9,27 @@ permissions:
   contents: read
 
 jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Scan repository with Trivy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          version: 'v0.74.0'
+          scan-type: fs
+          scan-ref: '.'
+          scanners: vuln,misconfig,secret
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          skip-dirs: .venv
+        env:
+          TRIVY_INCLUDE_DEV_DEPS: 'true'
+
   lint-type-test:
     runs-on: ubuntu-latest
     steps:
@@ -34,9 +55,8 @@ jobs:
       # trace is a failed "workflow file issue" run.
       #
       # actionlint 1.7.12 predates the concurrency `queue` key. GitHub accepts
-      # it (SchemaStore knows it), so dotbot-act.yml legitimately uses
-      # `queue: max` to let back-to-back /dotbot runs queue instead of
-      # cancelling each other. Ignore just that diagnostic until actionlint
+      # it (SchemaStore knows it), so act/release workflows use `queue: max`
+      # to preserve pending jobs instead of replacing them. Ignore just that diagnostic until actionlint
       # ships the schema — everything else stays enforced.
       - name: Lint workflows (actionlint)
         run: |

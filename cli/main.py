@@ -315,6 +315,9 @@ def _run_mode_workflow(config: ReviewConfig) -> int:
             "\nReview completed: "
             f"{summary.overall_correctness}, {summary.current_findings_count} findings"
         )
+    payload = result.review.as_dict()
+    payload["overall_correctness"] = summary.overall_correctness
+    print("[review-result] " + json.dumps(payload, ensure_ascii=True))
     return 0
 
 

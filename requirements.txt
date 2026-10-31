@@ -1,3 +1,8 @@
 PyGithub==2.8.1
 pydantic==2.12.5
 PyYAML==6.0.3
+# Security floors also upgrade vulnerable packages already present on a runner.
+certifi>=2026.10.23
+cryptography>=50.0.2
+PyJWT>=2.15.1
+urllib3>=2.8.0

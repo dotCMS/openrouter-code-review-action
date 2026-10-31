@@ -353,3 +353,50 @@ def test_act_model_generated_config_without_review_block_is_valid(
 
     assert cfg.act_model == "google/gemini-2.5-pro"
     assert cfg.review_model == DEFAULT_REVIEW_MODEL
+
+
+def test_panel_config_defaults_and_file_options(tmp_path: Path, base_env: Path) -> None:
+    defaults = load_model_config(repo_root=tmp_path)
+    assert defaults.review_discussion_rounds == 2
+    assert defaults.review_decision_policy == "unanimous"
+    path = tmp_path / ".openrouter-review.yml"
+    path.write_text("review:\n  discussion_rounds: 3\n  decision:\n    policy: lead\n")
+    file_config = load_model_config(repo_root=tmp_path)
+    config = ReviewConfig.from_args(repo_root=tmp_path, pr_number=7)
+    assert file_config.review_discussion_rounds == config.review_discussion_rounds == 3
+    assert file_config.review_decision_policy == config.review_decision_policy == "lead"
+    override = ReviewConfig.from_args(
+        repo_root=tmp_path, pr_number=7, review_decision_policy="unanimous"
+    )
+    assert override.review_decision_policy == "unanimous"
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        "discussion_rounds: 0",
+        "discussion_rounds: 6",
+        "discussion_rounds: true",
+        "discussion_rounds: '2'",
+        "discussion_rounds: 1.5",
+        "discussion_rounds: null",
+        "decision: lead",
+        "decision: null",
+        "decision: []",
+        "decision: {policy: majority}",
+        "decision: {policy: null}",
+        "decision: {policy: []}",
+        "decision: {policy: lead, typo: true}",
+    ],
+)
+def test_invalid_panel_config_fails_fast(tmp_path: Path, block: str) -> None:
+    (tmp_path / ".openrouter-review.yml").write_text("review:\n  " + block + "\n")
+    with pytest.raises(ConfigurationError):
+        load_model_config(repo_root=tmp_path)
+
+
+@pytest.mark.parametrize("block", ["discussion_rounds: 2", "decision: {policy: lead}"])
+def test_panel_options_are_review_only(tmp_path: Path, block: str) -> None:
+    (tmp_path / ".openrouter-review.yml").write_text("act:\n  " + block + "\n")
+    with pytest.raises(ConfigurationError, match="only valid under review"):
+        load_model_config(repo_root=tmp_path)

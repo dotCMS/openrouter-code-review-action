@@ -18,8 +18,8 @@ inputs:
     required: false
   github_approval_token:
     description: >-
-      Token used to submit the approval review when every reviewer model reports
-      "Overall: patch is correct". Usually a GitHub user PAT owned by a machine
+      Token used to submit the approval review when the final configured
+      decision policy accepts the patch (unanimous by default). Usually a GitHub user PAT owned by a machine
       user (e.g. dotCMS-Machine-User, secret DOTBOT_GITHUB_USER_PAT) so the
       approval is attributed to a named user. The workflow token works too (pass
       it from the calling workflow) — the approval then shows as
@@ -42,7 +42,7 @@ inputs:
     required: false
     default: "gpt-5.4"
   review_models:
-    description: "Comma-separated extra review models to run alongside the primary reviewer (multi-model rosters)"
+    description: "Comma-separated extra OpenRouter review models for concurrent investigation and shared discussion before one final review"
     required: false
     default: ""
   reasoning_effort:
@@ -69,7 +69,7 @@ inputs:
     required: false
     default: "0"
   stream_agent_messages:
-    description: "If '1', stream model output to logs"
+    description: "If '1', stream model output, or attributed panel discussion messages, to logs"
     required: false
     default: "1"
   act_instructions:
@@ -100,6 +100,17 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - name: Mark review in progress
+      id: review_status
+      if: inputs.mode == 'review' && inputs.dry_run != '1'
+      uses: actions/github-script@v7
+      env:
+        DOTBOT_ACTION_PATH: ${{ github.action_path }}
+      with:
+        script: |
+          const report = require(`${process.env.DOTBOT_ACTION_PATH}/scripts/review-status.cjs`);
+          return await report({ github, context, core, status: 'in_progress' });
+
     - name: Validate inputs
       shell: bash
       run: |
@@ -117,37 +128,6 @@ runs:
         if ! contains_word "$valid_search_modes" "${{ inputs.web_search_mode }}"; then
           echo "::error::Invalid web_search_mode: ${{ inputs.web_search_mode }} (allowed: disabled|cached|live)"; exit 2;
         fi
-    - name: Prepare review resume state
-      if: ${{ inputs.mode == 'review' }}
-      id: review_resume_state
-      shell: bash
-      env:
-        GITHUB_TOKEN: ${{ github.token }}
-        GITHUB_API_URL: ${{ github.api_url }}
-        GITHUB_EVENT_PATH: ${{ github.event_path }}
-        GITHUB_REPOSITORY: ${{ github.repository }}
-        RUNNER_TEMP: ${{ runner.temp }}
-        DOTBOT_MODEL_INPUT: ${{ inputs.model }}
-        OPENROUTER_REVIEW_CONFIG: ${{ inputs.config_path }}
-        GITHUB_ACTION_PATH: ${{ github.action_path }}
-        # Composite steps run in the *caller's* workspace, and `python -m`
-        # puts the current directory ahead of PYTHONPATH on sys.path — so a
-        # checkout containing a `cli/` package would execute that code
-        # instead of this pinned action. PYTHONSAFEPATH stops the injection.
-        PYTHONSAFEPATH: "1"
-      run: |
-        set -euo pipefail
-        PYTHONPATH="${GITHUB_ACTION_PATH}:${PYTHONPATH:-}" \
-          python3 -m cli.review.prepare_resume_state
-    - name: Restore review dotbot cache
-      if: ${{ inputs.mode == 'review' && steps.review_resume_state.outputs.restore_key != '' }}
-      id: review_dotbot_cache
-      uses: actions/cache/restore@v4
-      with:
-        path: |-
-          ${{ steps.review_resume_state.outputs.codex_home }}
-          ${{ runner.temp }}/openrouter-review-threads
-        key: ${{ steps.review_resume_state.outputs.restore_key }}
     - name: Install Python dependencies
       shell: bash
       env:
@@ -156,9 +136,9 @@ runs:
         set -euo pipefail
         python3 -m pip install --upgrade pip
         python3 -m pip install ${{ inputs.extra_pip_args }} -r "${{ github.action_path }}/requirements.txt"
-        # The legacy openai (Codex SDK) provider carries a large dependency;
-        # only install it when that provider is actually selected.
-        if [ "${DOTBOT_PROVIDER:-openrouter}" = "openai" ]; then
+        # The legacy openai (Codex SDK) provider carries a large dependency and
+        # is only valid for act mode; review is OpenRouter-only.
+        if [ "${{ inputs.mode }}" = "act" ] && [ "${DOTBOT_PROVIDER:-openrouter}" = "openai" ]; then
           python3 -m pip install ${{ inputs.extra_pip_args }} -r "${{ github.action_path }}/requirements-openai.txt"
         fi
 
@@ -173,6 +153,8 @@ runs:
         OPENROUTER_API_KEY: ${{ inputs.openrouter_api_key }}
         # Config
         DOTBOT_MODE: ${{ inputs.mode }}
+        DOTBOT_REVIEW_STATUS_COMMENT_ID: ${{ steps.review_status.outputs.result }}
+        DOTBOT_REVIEW_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         DOTBOT_MODEL: ${{ inputs.model }}
         DOTBOT_REVIEW_MODELS: ${{ inputs.review_models }}
         # In-repo model config — single edit swaps the review/act model.
@@ -191,18 +173,13 @@ runs:
         # deltas reach the GitHub Actions live log as soon as the
         # OpenRouter SSE stream emits them.
         PYTHONUNBUFFERED: "1"
-        # See the note on the resume-state step: without this, a checkout
-        # containing its own `cli/` package shadows the pinned action's code
-        # (`python -m` prefers the cwd). For act mode that means running
-        # PR-head code with a write token — the exact escalation the trusted
-        # ref pin exists to prevent.
+        # Without this, a checkout containing its own `cli/` package shadows
+        # the pinned action's code (`python -m` prefers the cwd). For act mode
+        # that means running PR-head code with a write token — the exact
+        # escalation the trusted ref pin exists to prevent.
         PYTHONSAFEPATH: "1"
-        # Conversation threads for the OpenRouter agent loop live here so
-        # the cache steps can persist them across runs for resume.
+        # Conversation threads for the OpenRouter agent loop live here.
         OPENROUTER_THREAD_DIR: ${{ runner.temp }}/openrouter-review-threads
-        CODEX_HOME: ${{ steps.review_resume_state.outputs.codex_home }}
-        DOTBOT_REVIEW_PREVIOUS_HEAD_SHA: ${{ steps.review_resume_state.outputs.previous_reviewed_sha }}
-        DOTBOT_REVIEW_CACHE_HIT: ${{ steps.review_dotbot_cache.outputs.cache-hit }}
       run: |
         set -euo pipefail
         # Execute the CLI directly; it detects GitHub Actions via env.
@@ -210,11 +187,15 @@ runs:
         # output is forwarded to the GH Actions log line-by-line.
         PYTHONPATH="${{ github.action_path }}:${PYTHONPATH:-}" \
           python3 -u -m cli.main
-    - name: Save review dotbot cache
-      if: ${{ inputs.mode == 'review' && steps.run_dotbot_cli.outcome == 'success' && steps.review_resume_state.outputs.current_cache_key != '' && !(steps.review_dotbot_cache.outputs.cache-hit == 'true' && steps.review_resume_state.outputs.restore_key == steps.review_resume_state.outputs.current_cache_key) }}
-      uses: actions/cache/save@v4
+
+    - name: Report unsuccessful review
+      if: always() && inputs.mode == 'review' && inputs.dry_run != '1' && (failure() || cancelled())
+      uses: actions/github-script@v7
+      env:
+        DOTBOT_ACTION_PATH: ${{ github.action_path }}
+        REVIEW_JOB_STATUS: ${{ job.status }}
       with:
-        path: |-
-          ${{ steps.review_resume_state.outputs.codex_home }}
-          ${{ runner.temp }}/openrouter-review-threads
-        key: ${{ steps.review_resume_state.outputs.current_cache_key }}
+        script: |
+          const report = require(`${process.env.DOTBOT_ACTION_PATH}/scripts/review-status.cjs`);
+          const status = process.env.REVIEW_JOB_STATUS === 'cancelled' ? 'cancelled' : 'failed';
+          await report({ github, context, core, status });

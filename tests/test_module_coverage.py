@@ -760,15 +760,30 @@ def test_main_helpers_cover_commands_and_event_loading(
         load_github_event()
 
 
-def test_review_action_and_workflow_use_expected_resume_guard_and_model() -> None:
+def test_review_action_uses_expected_model_and_drops_legacy_resume_cache() -> None:
     action_yaml = Path("action.yml").read_text(encoding="utf-8")
     review_workflow = Path(".github/workflows/dotbot-review.yml").read_text(encoding="utf-8")
     act_workflow = Path(".github/workflows/dotbot-act.yml").read_text(encoding="utf-8")
 
+    # The coordinator is the sole review engine and always deliberates fresh:
+    # no Prepare/Restore/Save resume-cache steps, no actions/cache, and none of
+    # the stale-review env vars may creep back into the composite action.
+    for obsolete in (
+        "Prepare review resume state",
+        "Restore review dotbot cache",
+        "Save review dotbot cache",
+        "cli.review.prepare_resume_state",
+        "actions/cache/restore",
+        "actions/cache/save",
+        "CODEX_HOME",
+        "DOTBOT_REVIEW_PREVIOUS_HEAD_SHA",
+        "DOTBOT_REVIEW_CACHE_HIT",
+    ):
+        assert obsolete not in action_yaml, f"legacy review resume/cache path present: {obsolete}"
+    # The legacy OpenAI (Codex SDK) dependency may only be installed for act
+    # mode; review is OpenRouter-only.
     assert (
-        "steps.review_dotbot_cache.outputs.cache-hit == 'true' && "
-        "steps.review_resume_state.outputs.restore_key == "
-        "steps.review_resume_state.outputs.current_cache_key"
+        '[ "${{ inputs.mode }}" = "act" ] && [ "${DOTBOT_PROVIDER:-openrouter}" = "openai" ]'
     ) in action_yaml
     # Review and Act are separate workflows: review runs only on PR events
     # so it reports as a genuine status check, Act only on /dotbot comments.
@@ -789,25 +804,39 @@ def test_review_action_and_workflow_use_expected_resume_guard_and_model() -> Non
     # predates the github_approval_token input.
     assert "dotCMS/openrouter-code-review-action@" in review_workflow
     assert "dotCMS/openrouter-code-review-action@" in act_workflow
-    # Both workflows track the same moving `latest` tag instead of a frozen
-    # SHA. dotCMS owns this repo and cuts every release here (auto-release.yml),
-    # so the tag is as trusted as a SHA — and it can never lag an input the
-    # workflows pass. A pin predating an input makes GitHub silently drop it
-    # (that is how github_approval_token was ignored and dotbot never approved a
-    # PR), which is exactly why we float on `latest` rather than bump a SHA.
-    expected_action_pin = "latest"
-    pins = {
-        line.split("dotCMS/openrouter-code-review-action@", 1)[1].strip()
-        for line in (review_workflow + act_workflow).splitlines()
-        if "dotCMS/openrouter-code-review-action@" in line
+    # The review preview executes one explicitly validated immutable candidate,
+    # never the incoming PR SHA. Act remains on the maintainer-controlled tag.
+    expected = {
+        "review": "998cdb510653072e8a52e6acc4cfd488d36db392",
+        "act": "latest",
     }
-    assert pins == {expected_action_pin}, f"unexpected action pins: {sorted(pins)}"
+    for job_name, source in (("review", review_workflow), ("act", act_workflow)):
+        workflow = yaml.safe_load(source)
+        pins = [
+            step["uses"]
+            for step in workflow["jobs"][job_name]["steps"]
+            if str(step.get("uses", "")).startswith("dotCMS/openrouter-code-review-action@")
+        ]
+        assert pins == ["dotCMS/openrouter-code-review-action@" + expected[job_name]]
     # Auto-approval when every reviewer agrees: prefer the machine-user PAT,
     # fall back to the workflow token so a repo without the secret still approves.
     assert (
         "github_approval_token: ${{ secrets.DOTBOT_GITHUB_USER_PAT || github.token }}"
         in review_workflow
     )
+
+
+def test_self_review_supplies_the_actual_checkout_root() -> None:
+    workflow = yaml.safe_load(
+        Path(".github/workflows/dotbot-review.yml").read_text(encoding="utf-8")
+    )
+    action_step = next(
+        step for step in workflow["jobs"]["review"]["steps"] if step.get("id") == "dotbot"
+    )
+    guidance = action_step["with"]["additional_prompt"]
+    assert "${{ github.workspace }}" in guidance
+    assert "code_location.absolute_file_path" in guidance
+    assert "never guess a checkout prefix" in guidance
 
 
 def test_self_hosted_workflows_drive_models_from_org_repo_variables() -> None:
@@ -848,10 +877,7 @@ def test_action_cli_steps_cannot_be_shadowed_by_the_checkout() -> None:
 
     action_yaml = yaml.safe_load(Path("action.yml").read_text(encoding="utf-8"))
     cli_steps = [
-        step
-        for step in action_yaml["runs"]["steps"]
-        if "cli.main" in str(step.get("run", ""))
-        or "cli.review.prepare_resume_state" in str(step.get("run", ""))
+        step for step in action_yaml["runs"]["steps"] if "cli.main" in str(step.get("run", ""))
     ]
 
     assert cli_steps, "expected at least one step invoking the CLI"

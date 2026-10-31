@@ -730,7 +730,7 @@ def score_pr(
             ).strip(),
         )
 
-    if isinstance(head_sha_at_capture, str) and head_sha_at_capture != pr.head_sha:
+    if head_sha_at_capture != pr.head_sha:
         # The methodology pins each PR's review to its registered
         # head_sha (§1.1, §4.1). A drifted SHA invalidates the score
         # because the diff being reviewed is not the diff the dataset
@@ -745,7 +745,8 @@ def score_pr(
             dataset_coverage=_dataset_coverage(pr_dataset_entries, []),
             notes=(
                 f"Codex baseline captured {head_sha_at_capture!r} but registry pins "
-                f"{pr.head_sha!r}; re-capture before scoring."
+                f"{pr.head_sha!r}; revalidate capture and label revisions before scoring. "
+                "A PR head must not be equated with its historical merge commit."
             ),
         )
 

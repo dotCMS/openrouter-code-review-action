@@ -2,8 +2,8 @@
 #
 # Selection criteria, labeling rubric, and FP definition live in
 # eval/baseline-methodology.md. This file is the *registry* — the fixed
-# list of (repo, pr, head_sha) triples that every bake-off scores
-# against.
+# list of (repo, pr, pr_head_sha, pr_base_sha) revisions that every
+# bake-off scores against.
 #
 # Sub-AC 1.1.1 selected the 10-PR sample; the long-form rationale lives
 # at evaluation/bakeoff/sample-prs.{md,yml}. This file is the canonical
@@ -41,15 +41,26 @@ sample_size:
 
 # ---------------------------------------------------------------------------
 # Concrete sample. Synced from Sub-AC 1.1.1 selection at
-# evaluation/bakeoff/sample-prs.yml. Each entry is pinned by `head_sha`
-# (the PR's merge commit) so every bake-off run reviews the identical
-# diff regardless of subsequent main-branch activity.
+# evaluation/bakeoff/sample-prs.yml.
+#
+# Revision semantics (read carefully):
+#   * `pr_head_sha` — the actual PR head commit under review. New
+#     consumers MUST pin this revision.
+#   * `pr_base_sha` — the PR's merge-base commit; the reviewed diff is
+#     `pr_base_sha...pr_head_sha`.
+#   * `head_sha` — LEGACY alias retained for backward compatibility
+#     ONLY. It holds the PR's *merge commit* SHA, NOT the PR head. It is
+#     the value eval/labeled_dataset/schema.py binds the human-labeled
+#     historical corpus to, so it must never be repurposed, migrated, or
+#     silently relabeled. The Codex runner exposes it as `merge_sha`.
 # ---------------------------------------------------------------------------
 prs:
   - id: dotcms-core-35567
     repo: dotCMS/core
     pr: 35567
     head_sha: 922996001a7e092e2a591db45b74d7603d085117
+    pr_head_sha: 340f0745311c3781e7e04335323003676191d126
+    pr_base_sha: b47e11f8ef68ac35c9d36819297c8d6b94b2a802
     slots:
       - real_bug_present
       - multiline_suggestion
@@ -68,6 +79,8 @@ prs:
     repo: dotCMS/core
     pr: 35509
     head_sha: 89f68df8cd5b5e1c83c638092548dfecd0b8c23a
+    pr_head_sha: b622dc216069acbce323cd026c00dddec877b2d1
+    pr_base_sha: 58cb228f882cc1ce2ba090370c632dd1bc2e01d7
     slots:
       - real_bug_present
       - multiline_suggestion
@@ -87,6 +100,8 @@ prs:
     repo: dotCMS/core
     pr: 35498
     head_sha: fec3bfeb56251911ebf21f566141e1b356b7b695
+    pr_head_sha: debfa5bb4b53b697bb71d67d73620763e4fcd124
+    pr_base_sha: f9ec566b0d56629d8233657ff0ec2e6c52984d04
     slots:
       - clean_diff
     languages:
@@ -105,6 +120,8 @@ prs:
     repo: dotCMS/core
     pr: 35458
     head_sha: 61d6d1abdf8abb18a84887e3f8a2a34501b5bfee
+    pr_head_sha: e02910e3715b91b3e59d8a4cbb345e3a66799663
+    pr_base_sha: 2fb1a7ec42e0adcac42c2353284527982a8c002a
     slots:
       - real_bug_present
       - continuation
@@ -125,6 +142,8 @@ prs:
     repo: dotCMS/core
     pr: 35491
     head_sha: 467b27607aec3df2a1520a9ab35dd83fef624a88
+    pr_head_sha: 94b834caeb05c7f3144b95fd4523f83adef1c0e9
+    pr_base_sha: b47e11f8ef68ac35c9d36819297c8d6b94b2a802
     slots:
       - real_bug_present
       - multiline_suggestion
@@ -144,6 +163,8 @@ prs:
     repo: dotCMS/core
     pr: 35469
     head_sha: a8ce11cdb2bb11261dbbcac19fcdf9a6ab917fb0
+    pr_head_sha: 95af82d5ecdbc9af2cb44af9a7bbc2df0416c20f
+    pr_base_sha: 61d6d1abdf8abb18a84887e3f8a2a34501b5bfee
     slots:
       - real_bug_present
     languages:
@@ -162,6 +183,8 @@ prs:
     repo: dotCMS/core
     pr: 35518
     head_sha: f31e33c1d2280fea6a3b7d9a277c14fb51053e6c
+    pr_head_sha: 29f0647a9a2a4fda7502e6b464f7a644b5f6fa4f
+    pr_base_sha: 89f68df8cd5b5e1c83c638092548dfecd0b8c23a
     slots:
       - clean_diff
     languages:
@@ -180,6 +203,8 @@ prs:
     repo: dotCMS/core
     pr: 35449
     head_sha: 76fb121bddeac5943fde9060014546a984dd6a5e
+    pr_head_sha: 26073a727019591b456606f938bd075718ee220e
+    pr_base_sha: 010009d388fa9355f68558bdd27e3909fb93bd82
     slots:
       - clean_diff
       - force_push_ancestry
@@ -199,6 +224,8 @@ prs:
     repo: dotCMS/core
     pr: 35465
     head_sha: 855c7d5ce8522b2bfdd0b512ade9f641ec198280
+    pr_head_sha: b5fe82bf9bc2f23e76bbe3a3c7a9d23eb25718f7
+    pr_base_sha: 32daf630763fd2bb7af2d61543c0278166f65cb5
     slots:
       - real_bug_present
       - multiline_suggestion
@@ -220,6 +247,8 @@ prs:
     repo: dotCMS/core
     pr: 35522
     head_sha: f495ee3b148512acdaabccccbea6d5650a205998
+    pr_head_sha: 94b8d9d070009640eb9059c355daa846ab849fac
+    pr_base_sha: 89f68df8cd5b5e1c83c638092548dfecd0b8c23a
     slots:
       - clean_diff
     languages:
