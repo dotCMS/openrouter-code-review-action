@@ -27,10 +27,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      # NOTE: ovh-k8s-cluster uses secrets.DOTBOT_GITHUB_USER_PAT (a machine-user
-      # PAT) for these statuses; this repo now has that secret too, but the
-      # workflow token still posts the statuses (statuses: write below), which
-      # keeps them independent of the approval PAT.
+      # Statuses use the workflow token (statuses: write), not the org-level
+      # DOTBOT_GITHUB_USER_PAT, so they stay independent of the approval PAT.
 # "Being reviewed by dotBot" is a commit status on the head SHA, not a
       # PR comment: statuses never send notification emails, and the PR's
       # checks area shows the in-progress state live. (A run cancelled by
