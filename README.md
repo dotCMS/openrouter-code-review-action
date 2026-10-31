@@ -66,6 +66,22 @@ submission failures are logged as warnings and never fail the review run.
 > marker in the review body. A bot cannot approve a PR the bot itself authored,
 > so a PAT remains the better choice where one exists.
 
+#### Token setup in the dotCMS org
+
+`DOTBOT_GITHUB_USER_PAT` is an **organization-level** secret available to every
+dotCMS repo, and the machine user already has write access to every repo
+through an org team. Adopting dotbot in a dotCMS repo needs only the workflow
+file — there is no per-repo secret to set and no per-repo access to grant.
+
+- **Override**: a repository-level secret with the same name takes precedence
+  over the org secret (GitHub precedence: environment > repository >
+  organization).
+- **Repos with outside collaborators**: if anyone outside the org has write
+  access to a repo, set a repository-level `DOTBOT_GITHUB_USER_PAT` with a
+  placeholder (dummy) value so the real org token is never exposed to them.
+  Approval with the placeholder fails and is logged as a warning; reviews still
+  post. To keep auto-approval there, pass `${{ github.token }}` instead.
+
 ## Act on `/dotbot` Comments
 
 When a trusted user comments `/dotbot <instructions>` on a PR, the action checks
