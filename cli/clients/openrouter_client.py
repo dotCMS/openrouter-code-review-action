@@ -63,6 +63,7 @@ OPENROUTER_USER_AGENT = "openrouter-code-review-action/1.0"
 OPENROUTER_TIMEOUT_SECONDS = 300
 
 DEFAULT_MAX_TOOL_ITERATIONS = 30
+MAX_REVIEW_CONTEXT_BYTES = 1024 * 1024
 _ONLINE_SUFFIX = ":online"
 _VALID_REASONING_EFFORTS = frozenset({"minimal", "low", "medium", "high"})
 
@@ -132,6 +133,7 @@ class OpenRouterClient:
         thread_store: OpenRouterThreadStore | None = None,
         max_tool_iterations: int = DEFAULT_MAX_TOOL_ITERATIONS,
         review_head_sha: str | None = None,
+        review_base_sha: str | None = None,
     ) -> None:
         self.config = config
         self._debug = make_debug(config)
@@ -142,6 +144,7 @@ class OpenRouterClient:
         )
         self._max_tool_iterations = max(1, max_tool_iterations)
         self._review_head_sha = review_head_sha
+        self._review_base_sha = review_base_sha
         self._usage_totals: dict[str, int] = {}
         self._request_count = 0
 
@@ -335,6 +338,7 @@ class OpenRouterClient:
                     repo_root=self.config.resolved_repo_root,
                     sandbox_mode=sandbox_mode,
                     revision=self._review_head_sha,
+                    base_revision=self._review_base_sha,
                 )
                 self._debug(2, f"[openrouter-tool] {tool_name} -> {len(output)} chars")
                 messages.append(
@@ -345,6 +349,10 @@ class OpenRouterClient:
                     }
                 )
 
+        if self._review_head_sha is not None:
+            raise DotBotExecutionError(
+                "Pinned review exhausted its tool budget; withholding approval"
+            )
         self._debug(
             1,
             f"OpenRouter agent hit the {self._max_tool_iterations}-iteration tool cap; "
@@ -384,9 +392,21 @@ class OpenRouterClient:
                 )
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
+        self._check_review_context(payload)
         if stream_enabled:
             return self._request_stream(payload)
         return _result_from_response(self._request(payload))
+
+    def _check_review_context(self, payload: dict[str, Any]) -> None:
+        """Fail closed before sending an oversized pinned-review conversation."""
+        if (
+            self._review_head_sha is not None
+            and len(json.dumps(payload).encode("utf-8")) > MAX_REVIEW_CONTEXT_BYTES
+        ):
+            raise DotBotExecutionError(
+                "Pinned review exceeded its 1 MiB request budget; split the PR or narrow discovery. "
+                "No review verdict or approval will be published."
+            )
 
     def _schema_turn(
         self,
@@ -406,6 +426,7 @@ class OpenRouterClient:
             "reasoning": {"effort": self._resolve_effort(reasoning_effort)},
             "stream": False,
         }
+        self._check_review_context(payload)
         started = time.monotonic()
         response = self._request(payload)
         elapsed = time.monotonic() - started

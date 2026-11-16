@@ -233,8 +233,27 @@ raw concurrent model streams are suppressed. A local transcript is saved to
 but repository-sensitive discussion still belongs only in appropriately protected
 run logs. No external tracing service or additional framework is required.
 
-Panel tools read the pinned PR commit, list its files, and search its code;
-they cannot write files or execute arbitrary shell commands. PRs changing credential
+### Adaptive context for large PRs
+
+PR diffs up to **256 KiB of UTF-8 text** are inlined exactly as before. Larger
+diffs switch automatically to a changed-file inventory (`git diff --numstat`),
+with no file patches preloaded. Reviewers use `read_diff(path)` to inspect pinned
+base-to-head changes and the existing file/list/search tools to follow callers.
+Generated files remain visible and inspectable; none are silently excluded.
+
+Pinned-review tool pages contain at most **32 KiB of UTF-8 content**, even for a
+single minified line. A truncated page supplies a `char_offset` continuation;
+repeat the same call with that offset to continue. Request conversations are
+capped at **1 MiB**, and exhausting the request/tool budget fails the review
+without publishing a verdict, resolving threads, or approving. File inventories
+above **64 KiB** require splitting the PR. Act mode is unchanged.
+
+Known configured credentials are redacted from panel errors, including the
+underlying OpenRouter execution error, so provider failures are diagnosable.
+These limits require no new inputs, variables, dependencies, or model changes.
+
+Panel tools read the pinned PR commit, page individual pinned diffs, list files,
+and search code; they cannot write files or execute arbitrary shell commands. PRs changing credential
 paths (`.env`, `.env.*`, `*.pem`, `*.key`, including deletions/renames) require human
 review: no PR file contents are sent to a review model, and approval/thread
 resolution are withheld. Public `.env.example`/`.env.sample` templates are allowed.

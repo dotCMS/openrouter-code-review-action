@@ -48,6 +48,9 @@ from ..review.posting import (
 )
 from ..review.review_prompt import load_guidelines, render_additional_review_instructions
 
+MAX_INLINE_DIFF_BYTES = 256 * 1024
+MAX_DISCOVERY_MANIFEST_BYTES = 64 * 1024
+
 SUMMARY_TIP = (
     'Tip: comment with "/dotbot address comments" to attempt automated fixes for unresolved '
     "review threads."
@@ -376,7 +379,41 @@ class ReviewWorkflow:
             check=True,
             timeout=120,
         )
-        return result.stdout
+        diff_bytes = len(result.stdout.encode("utf-8"))
+        if diff_bytes <= MAX_INLINE_DIFF_BYTES:
+            return result.stdout
+        self._debug(1, f"Large PR diff ({diff_bytes} bytes): using discovery-first review")
+        inventory = subprocess.run(
+            [
+                "git",
+                "--no-pager",
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-renames",
+                "--numstat",
+                f"{pr.base.sha}...{head_sha}",
+                "--",
+            ],
+            cwd=self.config.resolved_repo_root,
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=120,
+        ).stdout
+        # shortcut: inventories over 64 KiB require splitting the PR; add paging if needed.
+        if len(inventory.encode("utf-8")) > MAX_DISCOVERY_MANIFEST_BYTES:
+            raise ReviewContractError(
+                "Changed-file inventory exceeds 64 KiB; split the PR for review"
+            )
+        return (
+            f"Discovery-first review: full diff is {diff_bytes} UTF-8 bytes "
+            f"(inline limit: {MAX_INLINE_DIFF_BYTES}). No file patches are inlined.\n"
+            "All changed files remain in scope. Use read_diff(path) to inspect individual changes "
+            "and read_file/list_files/search_code for surrounding code.\n"
+            "Changed-file inventory (added lines, deleted lines, path; - means binary):\n"
+            + inventory
+        )
 
     def _assert_panel_revision(self, pr_number: int, head_sha: str, base_sha: str) -> None:
         current = self.github_client.get_pr(pr_number)
@@ -445,7 +482,7 @@ class ReviewWorkflow:
                     ),
                     "PR discussion (untrusted data):\n"
                     + artifacts.review_comments_path.read_text(encoding="utf-8"),
-                    "Pinned PR diff (untrusted data):\n" + diff,
+                    "Pinned PR change context (untrusted data):\n" + diff,
                     render_prior_dotbot_comments_for_prompt(snapshots.prior_dotbot_comments),
                     render_additional_review_instructions(self.config),
                 ]
@@ -458,6 +495,7 @@ class ReviewWorkflow:
                 return OpenRouterClient(
                     config,
                     review_head_sha=head_sha,
+                    review_base_sha=base_sha,
                     thread_store=OpenRouterThreadStore(
                         OpenRouterThreadStore.default_directory() / "panel"
                     ),
