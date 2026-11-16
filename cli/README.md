@@ -174,7 +174,7 @@ Invalid `DOTBOT_ALLOWED_COMMENTER_ASSOCIATIONS` values fail fast during configur
 
 ## Operation Modes
 
-- **`review`** (default): Analyzes PR diffs using built-in guidelines from `prompts/review.md`
+- **`review`** (default): Analyzes PR diffs using built-in guidelines from `prompts/review.md`. Diffs up to 256 KiB are inlined; larger PRs provide an inventory and use pinned `read_diff` discovery. Pinned inspection pages are byte-bounded with `char_offset` continuations, and request/tool budget exhaustion prevents publication and approval. See the root README for limits.
 - **`act`**: Responds to `/dotbot` commands in PR comments to make autonomous code edits with optional custom instructions
 
 ## Testing

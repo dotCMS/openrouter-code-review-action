@@ -391,7 +391,7 @@ class ReviewCoordinator:
             if isinstance(result, BaseException):
                 detail = (
                     f": {self._redact(str(result))}"
-                    if isinstance(result, ReviewContractError)
+                    if isinstance(result, (ReviewContractError, DotBotExecutionError))
                     else ""
                 )
                 raise DotBotExecutionError(

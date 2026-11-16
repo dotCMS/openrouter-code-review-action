@@ -5,6 +5,7 @@ chat completions do not. This module provides the small tool surface the
 review and act workflows rely on:
 
 * ``read_file`` — read a file inside the repository (line-bounded).
+* ``read_diff`` — page through one file's diff between the pinned PR commits.
 * ``write_file`` — create/overwrite a file inside the repository.
 * ``run_command`` — run a shell command in the repository root.
 
@@ -34,6 +35,7 @@ _READ_ONLY_SANDBOX_MODES = frozenset({"read-only"})
 
 MAX_TOOL_OUTPUT_CHARS = 24_000
 MAX_READ_FILE_CHARS = 100_000
+MAX_PINNED_TOOL_BYTES = 32 * 1024
 COMMAND_TIMEOUT_SECONDS = 120
 
 READ_FILE_TOOL: dict[str, Any] = {
@@ -53,6 +55,11 @@ READ_FILE_TOOL: dict[str, Any] = {
                     "description": "1-based first line to read (optional)",
                 },
                 "limit": {"type": "integer", "description": "Max lines to read (optional)"},
+                "char_offset": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Pinned reviews: character offset within the selected lines; use the continuation offset returned for large files",
+                },
             },
             "required": ["path"],
             "additionalProperties": False,
@@ -101,7 +108,11 @@ LIST_FILES_TOOL: dict[str, Any] = {
     "function": {
         "name": "list_files",
         "description": "List tracked repository files without running repository code.",
-        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+        "parameters": {
+            "type": "object",
+            "properties": {"char_offset": {"type": "integer", "minimum": 0}},
+            "additionalProperties": False,
+        },
     },
 }
 SEARCH_CODE_TOOL: dict[str, Any] = {
@@ -111,13 +122,35 @@ SEARCH_CODE_TOOL: dict[str, Any] = {
         "description": "Search tracked repository files for literal text. Returns path:line matches.",
         "parameters": {
             "type": "object",
-            "properties": {"text": {"type": "string"}},
+            "properties": {
+                "text": {"type": "string"},
+                "char_offset": {"type": "integer", "minimum": 0},
+            },
             "required": ["text"],
             "additionalProperties": False,
         },
     },
 }
-READ_ONLY_TOOL_SPECS = [READ_FILE_TOOL, LIST_FILES_TOOL, SEARCH_CODE_TOOL]
+READ_DIFF_TOOL: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "read_diff",
+        "description": (
+            "Read one file's diff between the pinned PR base and head, including deletions. "
+            "Output is byte-bounded; repeat with the returned char_offset to continue."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Exact repository-relative file path"},
+                "char_offset": {"type": "integer", "minimum": 0},
+            },
+            "required": ["path"],
+            "additionalProperties": False,
+        },
+    },
+}
+READ_ONLY_TOOL_SPECS = [READ_FILE_TOOL, LIST_FILES_TOOL, SEARCH_CODE_TOOL, READ_DIFF_TOOL]
 TOOL_SPECS: list[dict[str, Any]] = [READ_FILE_TOOL, WRITE_FILE_TOOL, RUN_COMMAND_TOOL]
 
 
@@ -128,6 +161,7 @@ def execute_tool(
     repo_root: Path,
     sandbox_mode: str,
     revision: str | None = None,
+    base_revision: str | None = None,
 ) -> str:
     """Execute one tool call and return its output as a string.
 
@@ -145,6 +179,10 @@ def execute_tool(
         return "error: tool arguments must be a JSON object"
 
     read_only = sandbox_mode in _READ_ONLY_SANDBOX_MODES
+    if read_only and revision is not None and name == "read_diff":
+        return _tool_read_diff(
+            arguments, repo_root=repo_root, revision=revision, base_revision=base_revision
+        )
     if read_only and revision is not None and name in {"read_file", "list_files", "search_code"}:
         return _tool_inspect_revision(name, arguments, repo_root=repo_root, revision=revision)
     if name == "read_file":
@@ -260,6 +298,73 @@ def read_file_at_revision(repo_root: Path, revision: str, raw_path: str) -> str 
     return result.stdout.decode("utf-8", errors="replace")
 
 
+def _bounded_review_page(content: str, arguments: dict[str, Any]) -> str:
+    """Page by character offset while bounding UTF-8 bytes, even for minified lines."""
+    offset = arguments.get("char_offset", 0)
+    if isinstance(offset, bool) or not isinstance(offset, int) or not 0 <= offset <= len(content):
+        return "error: char_offset must be an integer between 0 and the output length"
+    page = content[offset:].encode("utf-8")[:MAX_PINNED_TOOL_BYTES].decode("utf-8", errors="ignore")
+    end = offset + len(page)
+    if end < len(content):
+        return (
+            page + f"\n... (truncated; continue with char_offset={end}; total_chars={len(content)})"
+        )
+    return page or "(end of output)"
+
+
+def _tool_read_diff(
+    arguments: dict[str, Any], *, repo_root: Path, revision: str, base_revision: str | None
+) -> str:
+    """Inspect a literal path without running external diff drivers or checkout code."""
+    if base_revision is None:
+        return "error: diff requires exact PR base and head commit SHAs"
+    for sha in (base_revision, revision):
+        if (
+            not isinstance(sha, str)
+            or len(sha) not in {40, 64}
+            or any(char not in "0123456789abcdefABCDEF" for char in sha)
+        ):
+            return "error: diff requires exact PR base and head commit SHAs"
+    raw_path = arguments.get("path")
+    if not isinstance(raw_path, str) or not raw_path.strip() or "\0" in raw_path:
+        return "error: read_diff requires a non-empty string path"
+    root = repo_root.resolve()
+    path = Path(os.path.abspath(root / raw_path))
+    if not is_reviewable_path(path, root):
+        return (
+            "error: diff access to repository metadata, credential files or path escapes is denied"
+        )
+    relative = path.relative_to(root).as_posix()
+    try:
+        if not (
+            _pinned_blob_at(root, revision, relative)
+            or _pinned_blob_at(root, base_revision, relative)
+        ):
+            return "error: read_diff requires an exact file present at the pinned base or head"
+        result = subprocess.run(
+            [
+                "git",
+                "--no-pager",
+                "--literal-pathspecs",
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
+                "--no-renames",
+                f"{base_revision}...{revision}",
+                "--",
+                relative,
+            ],
+            cwd=root,
+            capture_output=True,
+            check=True,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+        )
+        return _bounded_review_page(result.stdout.decode("utf-8", errors="replace"), arguments)
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return "error: could not inspect the pinned PR diff"
+
+
 def _tool_inspect_revision(
     name: str, arguments: dict[str, Any], *, repo_root: Path, revision: str
 ) -> str:
@@ -281,11 +386,7 @@ def _tool_inspect_revision(
             content = "".join(
                 lines[offset - 1 :] if limit is None else lines[offset - 1 : offset - 1 + limit]
             )
-            return (
-                content[:MAX_READ_FILE_CHARS] + "\n... (truncated)"
-                if len(content) > MAX_READ_FILE_CHARS
-                else content
-            )
+            return _bounded_review_page(content, arguments)
         if name == "list_files":
             args = ["ls-tree", "-r", "--name-only", "-z", revision]
         else:
@@ -312,11 +413,7 @@ def _tool_inspect_revision(
             content = _render_pinned_search_matches(
                 result.stdout, revision=revision, repo_root=repo_root
             )
-        return (
-            content[:MAX_TOOL_OUTPUT_CHARS] + "\n... (truncated)"
-            if len(content) > MAX_TOOL_OUTPUT_CHARS
-            else content
-        ) or "(no matches)"
+        return _bounded_review_page(content, arguments) if content else "(no matches)"
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError):
         return "error: reviewed-commit inspection failed"
 
