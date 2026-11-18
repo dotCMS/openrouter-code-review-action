@@ -312,6 +312,7 @@ class _FakeProc:
 def test_invoke_review_cli_anchors_to_trusted_source(tmp_path, monkeypatch):
     captured: dict[str, Any] = {}
     monkeypatch.setenv("DOTBOT_REVIEW_STATUS_COMMENT_ID", "unrelated-action-comment")
+    monkeypatch.setenv("DOTBOT_PROMPTS", "iac")
 
     def _fake_run(cmd, **kwargs):
         captured["cmd"] = cmd
@@ -342,4 +343,5 @@ def test_invoke_review_cli_anchors_to_trusted_source(tmp_path, monkeypatch):
     assert captured["cwd"] == str(runner.REPO_ROOT)
     assert captured["env"]["DOTBOT_REVIEW_EXPECTED_HEAD_SHA"] == pr.head_sha
     assert captured["env"]["DOTBOT_REVIEW_EXPECTED_BASE_SHA"] == pr.base_sha
+    assert "DOTBOT_PROMPTS" not in captured["env"]
     assert "DOTBOT_REVIEW_STATUS_COMMENT_ID" not in captured["env"]
