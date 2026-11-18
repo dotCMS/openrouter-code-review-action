@@ -99,3 +99,5 @@ def test_prompts_env_and_kwarg_reach_review_config(monkeypatch: pytest.MonkeyPat
         "code_java",
         "iac",
     )
+    assert ReviewConfig.from_args(**base, prompts="code_java, iac").prompts == ("code_java", "iac")
+    assert ReviewConfig.from_args(**base, prompts="").prompts == ("code_java",)

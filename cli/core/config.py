@@ -583,7 +583,9 @@ def _apply_config_overrides(values: _ReviewConfigValues, kwargs: Mapping[str, An
 
     prompts = kwargs.get("prompts")
     if prompts is not None:
-        values["prompts"] = tuple(prompts)
+        # A string is comma-separated, like DOTBOT_PROMPTS; tuple("iac") would split characters.
+        names = _parse_model_list(prompts) if isinstance(prompts, str) else tuple(prompts)
+        values["prompts"] = names or DEFAULT_PROMPTS
 
     repo_root = kwargs.get("repo_root")
     if repo_root is not None:
