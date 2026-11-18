@@ -235,7 +235,7 @@ run logs. No external tracing service or additional framework is required.
 
 Panel tools read the pinned PR commit, list its files, and search its code;
 they cannot write files or execute arbitrary shell commands. PRs changing credential
-paths (`.env`, `.env.*`, `*.pem`, `*.key`, including deletions/renames) require human
+paths (`.env`, `.env.*`, `*.pem`, `*.key`, `*.tfstate*`, `kubeconfig`, `*.kubeconfig`, `.kube/`, including deletions/renames) require human
 review: no PR file contents are sent to a review model, and approval/thread
 resolution are withheld. Public `.env.example`/`.env.sample` templates are allowed.
 The checkout must
@@ -260,7 +260,8 @@ through explicit dispositions; prior verdicts never count as current votes. Ther
 is no sequential fallback or review resume/cache path. Panel options are configured
 in the YAML file, not new CLI flags or Action inputs. The steering instructions
 live in [`prompts/review_panel.md`](prompts/review_panel.md), alongside the general
-review guidelines in [`prompts/review.md`](prompts/review.md).
+review guidelines in [`prompts/review.md`](prompts/review.md) and the focus prompts
+selected with `prompts` (see [Review focus prompts](#review-focus-prompts)).
 
 ### Org/Repo Variables (`vars.DOTBOT_*`)
 
@@ -308,6 +309,7 @@ call time; `cached` and `disabled` skip the live web fetch.
 | **Review-only** | | |
 | `github_approval_token` | Token used to approve the PR when the configured final decision policy accepts the patch. Normally a machine-user PAT (e.g. `secrets.DOTBOT_GITHUB_USER_PAT` for `dotCMS-Machine-User`); `${{ github.token }}` also works and approves as `github-actions[bot]`. When unset (or the final policy rejects the patch) reviews post as normal comments with no approval | *(unset)* |
 | `additional_prompt` | Extra reviewer instructions (verbatim) | |
+| `prompts` | Comma-separated focus prompts appended to the base guidelines: `code_java` (application code), `iac` (Terraform, Kubernetes, Helm, Helmfile, deploy scripts) | `code_java` |
 | `resolve_stale_threads` | `0` or `1` — resolve prior unresolved dotbot threads the reviewer model saw but declined to carry forward (judged stale/fixed); threads never shown to the model stay open | `0` |
 | **Act-only** | | |
 | `act_instructions` | Extra guidance appended to the edit prompt | |
@@ -389,17 +391,45 @@ action-authored review threads** as context.
   422s, set `debug_level: 2` to log anchors.
 - **Model errors**: ensure your OpenRouter key has access to the selected slug
   and that the slug exists in the OpenRouter catalog.
-- Review uses built-in prompts (see `prompts/review.md`). Customize with
-  `additional_prompt`.
+- Review uses the built-in base prompt (`prompts/review.md`) plus the focus
+  prompts selected with `prompts` (e.g. `prompts: iac` for an infrastructure
+  repo). Customize further with `additional_prompt`.
+
+## Review focus prompts
+
+Every review loads the base guidelines in `prompts/review.md` (finding bar,
+verdict rule, comment format, output schema). The `prompts` input then appends
+one or more focus prompts, each a bundled `prompts/<name>.md` file:
+
+| Name | Covers |
+|------|--------|
+| `code_java` (default) | Application code: authorization, transactions, caches, concurrency, error handling |
+| `iac` | Terraform, Kubernetes manifests, Helm, Helmfile, and Bash/Python/JavaScript deploy scripts |
+
+```yaml
+        with:
+          prompts: iac            # or: code_java,iac for a mixed repo
+```
+
+The selection is per workflow, not per PR: every listed prompt is loaded on every
+review. A name may be written with or without `.md`. An unknown name fails the run; an empty value falls back to `code_java`.
+`additional_prompt` still appends repo-specific instructions after these.
 
 ## Local Development
 
 ```bash
 uv sync                # install deps
-make lint              # format, lint, type-check
+make lint              # format, lint, type-check, then audit
+make audit             # uv audit: known vulnerabilities in locked deps
+make test              # pytest
 GITHUB_TOKEN=… OPENROUTER_API_KEY=… PYTHONPATH=. python -m cli.main \
   --repo owner/repo --pr 123 --mode review --dry-run
 ```
+
+Development needs Python 3.12–3.14 (`requires-python = ">=3.12,<3.15"`) and a
+recent uv. `uv lock` only resolves releases that have been public for at least
+3 days (`exclude-newer = "3 days"` in `pyproject.toml`), so a brand-new fix may
+not resolve until that window passes.
 
 The patched certifi, cryptography, PyJWT, and urllib3 minimums are enforced in
 `requirements.txt` as well as the resolved `uv.lock`, so pip upgrades vulnerable

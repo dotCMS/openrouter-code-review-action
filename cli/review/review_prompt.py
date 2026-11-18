@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from ..core.config import ReviewConfig, make_debug
@@ -16,7 +17,16 @@ def _load_builtin_prompt(config: ReviewConfig, filename: str) -> str:
 
 
 def load_guidelines(config: ReviewConfig) -> str:
-    return _load_builtin_prompt(config, "review.md") if config.mode == "review" else ""
+    """Base review guidelines plus each focus prompt named in ``config.prompts``."""
+    if config.mode != "review":
+        return ""
+    # Accept the filename spelling too: "iac.md" means "iac".
+    names = [name.removesuffix(".md") for name in config.prompts]
+    for name in names:
+        # Names become filenames: reject anything that could leave prompts/.
+        if not re.fullmatch(r"[a-z0-9_]+", name):
+            raise PromptError(f"Invalid prompt name {name!r}: use lowercase letters, digits, '_'")
+    return "\n\n".join(_load_builtin_prompt(config, f"{name}.md") for name in ("review", *names))
 
 
 def load_panel_instructions(config: ReviewConfig) -> str:

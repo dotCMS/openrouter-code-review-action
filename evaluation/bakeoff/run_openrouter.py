@@ -115,6 +115,8 @@ DEFAULT_OUT_DIR = "evaluation/bakeoff/runs"
 DEFAULT_REPLAY_DIR = "evaluation/bakeoff/replay"
 
 PROMPT_PATH = _REPO_ROOT / "prompts" / "review.md"
+# The bakeoff sample is application code: pair the base with the default focus prompt.
+FOCUS_PROMPT_PATH = _REPO_ROOT / "prompts" / "code_java.md"
 
 
 # --------------------------------------------------------------------------- #
@@ -213,7 +215,9 @@ def fetch_pr_diff(pr: SamplePR) -> str:
 
 
 def _system_prompt() -> str:
-    return PROMPT_PATH.read_text(encoding="utf-8")
+    return "\n\n".join(
+        path.read_text(encoding="utf-8") for path in (PROMPT_PATH, FOCUS_PROMPT_PATH)
+    )
 
 
 def _user_message(pr: SamplePR, diff: str) -> str:

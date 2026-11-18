@@ -10,8 +10,8 @@
 > | AC 1 — `finding_overlap` | ≥ 80 % overlap on True-Positive findings between OpenRouter and Codex on the sample |
 > | AC 2 — `false_positive_discipline` | Aggregate false-positive rate of OpenRouter ≤ Codex baseline on the sample |
 >
-> Anything not specified here defers to `prompts/review.md` (the
-> reviewer prompt) and the schema in `cli/core/models.py`
+> Anything not specified here defers to `prompts/review.md` (the base
+> reviewer prompt, loaded with the default `prompts/code_java.md` focus) and the schema in `cli/core/models.py`
 > (`REVIEW_OUTPUT_SCHEMA`).
 
 ---
