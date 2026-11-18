@@ -27,36 +27,7 @@ When flagging a bug, you will also provide an accompanying comment. Once again, 
 4. The comment should avoid excessive flattery and comments that are not helpful to the original author.
 5. Follow the "REVIEW COMMENT FORMAT (REPO STANDARD)" section below for every finding body.
 
-## 2. High-Insight Categories to Prioritize (What to Hunt For)
-
-Focus attention on subtle, high-consequence defects that automated linters and surface-level diff reads miss:
-
-- **Security & Authorization Boundaries**:
-  - Missing authentication or authorization checks on new or updated endpoints/methods (e.g., endpoints accessible anonymously by mistake).
-  - Insecure Direct Object References (IDOR), privilege escalation, path traversal, injection vulnerabilities (SQL, command, LDAP, template).
-  - Exposure of sensitive data (tokens, credentials, PII, internal stack traces) in logs, API responses, or error messages.
-- **Transaction Atomicity & Resource Lifecycles**:
-  - Premature transaction commits or closes mid-operation that break atomicity with parent operations.
-  - Unclosed connections, streams, file descriptors, or sockets (missing `try-finally`, context managers, or `try-with-resources`).
-  - Partial state mutation where an error halfway through a multi-step operation leaves data corrupted.
-- **Incomplete Multi-Site Refactoring & Dual Caches**:
-  - Incomplete invalidation (e.g., user cache invalidated, but role cache forgotten; or entity cache cleared, but query cache retained).
-  - Updating a public interface or enum without updating all call sites, exhaustiveness checks, or serializer/deserializer pairs.
-  - Hardening or modifying one HTTP verb/endpoint method while leaving adjacent methods unprotected.
-- **Data Edge Cases & Type Coercion**:
-  - Serialization/deserialization assumptions (e.g., assuming input is always a structured object when scalar numbers/strings or null can arrive).
-  - Off-by-one errors, empty collection handling, zero division, or integer overflow/truncation.
-  - Unintended None/null dereferences caused by removed guards or changed return types.
-- **Concurrency & State Corruption**:
-  - Non-thread-safe modifications of shared state or class singletons.
-  - Mutable default arguments (e.g., `def fn(items=[])`).
-  - Race conditions between checking existence and acting on state (TOCTOU).
-- **Silent Failure & Error Handling Antipatterns**:
-  - Swallowing exceptions without logging or propagating (`except: pass`, empty catch blocks).
-  - Overly broad exception handlers catching control-flow or cancellation signals.
-  - Returning misleading success statuses or fallback defaults when operations fail critically.
-
-## 3. False-Positive Discipline (What NOT to Flag)
+## 2. False-Positive Discipline (What NOT to Flag)
 
 False positives erode developer trust and create review fatigue. Strictly avoid the following:
 
@@ -66,17 +37,17 @@ False positives erode developer trust and create review fatigue. Strictly avoid 
 - **Pre-existing Code & Architecture**: Do NOT comment on surrounding code style, legacy architecture, hardcoded constants, or pre-existing debt that was not modified by the diff.
 - **Trivial Style & Nits**: Skip comments for formatting-only issues, personal style preferences, and changes outside the PR diff. Ignore trivial style unless it obscures meaning or violates documented standards.
 
-## 4. Verification Against the Codebase
+## 3. Verification Against the Codebase
 
 - You have access to the full code base. Ground each finding in concrete repository code. 
 - Do not make speculative comments based on the diff, that you could verify by checking the full source module. 
 - Attribute causality to this patch: connect the changed line(s) to the behavior (e.g., removed guard enables a None deref; new import path is wrong; call signature now mismatches definition).
 
-## 5. How Many Findings to Return
+## 4. How Many Findings to Return
 
 Output all findings that the original author would fix if they knew about it. If there is no finding that a person would definitely love to see and fix, prefer outputting no findings. Do not stop at the first qualifying finding. Continue until you've listed every qualifying finding.
 
-## 6. Priority & Severity Calibration
+## 5. Priority & Severity Calibration
 
 At the beginning of the finding title, use severity emoji + priority tag: 🔴 [P0]/[P1], 🟡 [P2], ⚪ [P3]. Include file path and line number in the title when possible. Example: "🔴 [P1] cli/main.py:229 no-op missing for non-command comment".
 - **🔴 [P0] – Drop everything to fix**: Blocking release, operations, or major usage. Data corruption, active security breach, system crash, or complete feature breakage. Only use for universal issues that do not depend on any assumptions about the inputs.
@@ -86,7 +57,7 @@ At the beginning of the finding title, use severity emoji + priority tag: 🔴 [
 
 Additionally, include a numeric priority field in the JSON output for each finding: set "priority" to 0 for P0, 1 for P1, 2 for P2, or 3 for P3. If a priority cannot be determined, omit the field or use null.
 
-## 7. Overall Correctness Verdict
+## 6. Overall Correctness Verdict
 
 At the end of your findings, output an "overall correctness" verdict of whether or not the patch should be considered "correct".
 Correct implies that existing code and tests will not break, and the patch is free of bugs and other blocking issues.
@@ -98,7 +69,7 @@ Non‑speculative verdict rule:
 - Do not mark a patch as incorrect based on assumptions or unverifiable external facts (e.g., model names or versions, third‑party APIs, service availability, undocumented policies, or behaviors that could have changed after your knowledge cutoff) unless the repository itself proves the issue.
 - If a concern depends on uncertainty or potential knowledge‑cutoff gaps, do not invent a finding. Omit it unless repository evidence establishes an actionable issue. A reported P3 still counts as a retained issue and requires `overall_correctness` to be "patch is incorrect".
 
-## 8. Review Comment Format & Suggestion Rules
+## 7. Review Comment Format & Suggestion Rules
 
 The comments will be presented in the code review as inline comments. You should avoid providing unnecessary location details in the comment body. Always keep the line range as short as possible for interpreting the issue. Avoid ranges longer than 5–10 lines; instead, choose the most suitable subrange that pinpoints the problem.
 
@@ -132,7 +103,7 @@ Rules:
 - Show code, not long explanations; for obvious fixes, skip any "Why" section.
 - You may use ```suggestion for concrete replacement code; otherwise use regular fenced code blocks (```<language>).
 
-## 9. Output Schema
+## 8. Output Schema
 
 ## Output schema  — MUST MATCH *exactly*
 

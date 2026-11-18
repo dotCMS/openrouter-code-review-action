@@ -30,7 +30,7 @@ cli/
 │   ├── coordinator.py         # Concurrent review panel, discussion, and decision policies
 │   ├── dedupe.py              # Duplicate-detection helpers
 │   ├── posting.py             # Inline comment payload/build/post helpers
-│   ├── review_prompt.py       # Load editable Markdown review/panel prompts
+│   ├── review_prompt.py       # Load base, focus (DOTBOT_PROMPTS) and panel Markdown prompts
 │   ├── context_manager.py     # Context artifact writing
 │   ├── patch_parser.py        # Patch parsing utilities
 │   └── anchor_engine.py       # Diff anchor resolution utilities
@@ -136,7 +136,7 @@ evaluation captures use that marker, never intermediate panel turns.
 Configured credentials are redacted; other sensitive source information may still
 appear in discussion, so protect log access. No private reasoning stream is logged.
 
-Credential-path changes (`.env`, `.env.*`, `*.pem`, `*.key`, including deletions/renames)
+Credential-path changes (`.env`, `.env.*`, `*.pem`, `*.key`, `*.tfstate*`, `kubeconfig`, `*.kubeconfig`, `.kube/`, including deletions/renames)
 require human review instead of model calls, automatic approval or thread resolution.
 Public `.env.example`/`.env.sample` templates remain reviewable.
 
@@ -174,7 +174,7 @@ Invalid `DOTBOT_ALLOWED_COMMENTER_ASSOCIATIONS` values fail fast during configur
 
 ## Operation Modes
 
-- **`review`** (default): Analyzes PR diffs using built-in guidelines from `prompts/review.md`
+- **`review`** (default): Analyzes PR diffs using the built-in base guidelines in `prompts/review.md` plus the focus prompts named in `DOTBOT_PROMPTS` (default `code_java`)
 - **`act`**: Responds to `/dotbot` commands in PR comments to make autonomous code edits with optional custom instructions
 
 ## Testing
@@ -205,6 +205,7 @@ The v2 release updates `v2` and `latest`, not `v1`.
 ### Customizing the Review Prompt
 
 - General review guidelines live in `prompts/review.md`; panel roles, discussion, evidence, and verdict instructions live in `prompts/review_panel.md`.
+- Domain focus lives in separate files appended to the base: `prompts/code_java.md` (application code, the default) and `prompts/iac.md` (infrastructure as code). Select them with env `DOTBOT_PROMPTS`, comma-separated (e.g. `DOTBOT_PROMPTS=code_java,iac`); an unknown name fails the run. Adding a focus is a new Markdown file.
 - Provide extra reviewer guidance using env `DOTBOT_ADDITIONAL_PROMPT` (verbatim text). No Python changes are needed to edit the bundled Markdown steering prompts.
 
 ## Benefits

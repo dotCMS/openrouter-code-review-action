@@ -84,6 +84,13 @@ inputs:
     description: "Extra reviewer instructions appended to the review prompt (verbatim)"
     required: false
     default: ""
+  prompts:
+    description: >-
+      Comma-separated focus prompts appended to the base review guidelines.
+      Each name is a bundled prompts/<name>.md file (the .md suffix is optional): code_java (application
+      code) or iac (Terraform, Kubernetes, Helm, Helmfile, deploy scripts).
+    required: false
+    default: "code_java"
   resolve_stale_threads:
     description: >-
       If '1', resolve (close) prior unresolved dotbot review threads that the
@@ -165,6 +172,7 @@ runs:
         DOTBOT_ACT_INSTRUCTIONS: ${{ inputs.act_instructions }}
         DOTBOT_ALLOWED_COMMENTER_ASSOCIATIONS: ${{ inputs.allowed_commenter_associations }}
         DOTBOT_ADDITIONAL_PROMPT: ${{ inputs.additional_prompt }}
+        DOTBOT_PROMPTS: ${{ inputs.prompts }}
         DOTBOT_RESOLVE_STALE_THREADS: ${{ inputs.resolve_stale_threads }}
         DEBUG_CODEREVIEW: ${{ inputs.debug_level }}
         DRY_RUN: ${{ inputs.dry_run }}

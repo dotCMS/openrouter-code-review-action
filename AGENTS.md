@@ -2,17 +2,19 @@
 
 ## Project Structure & Module Organization
 - `cli/`: Python source. Entry point `main.py`; config/models in `config.py`, `models.py`, `exceptions.py`; workflows in `workflows/review_workflow.py`, `workflows/edit_workflow.py`; prompts in `review_prompt.py`, `edit_prompt.py`; infrastructure in `codex_client.py`, `github_client.py`, `git_ops.py`; review helpers in `review/dedupe.py`, `review/posting.py`; diff utilities in `patch_parser.py`, `anchor_engine.py`; context in `context_manager.py`.
-- `prompts/`: Review guidelines (`review.md`).
+- `prompts/`: Base review guidelines (`review.md`), panel instructions (`review_panel.md`), and focus prompts selected with `DOTBOT_PROMPTS` (`code_java.md` by default, `iac.md`). A new focus is a new Markdown file; no Python change.
 - `action.yml`: Composite GitHub Action definition and inputs.
-- `Makefile`: QA tasks (`fmt`, `lint`, `type`, `qa`).
+- `Makefile`: QA tasks (`fmt`, `lint`, `audit`, `type`, `test`, `qa`).
 - `README.md`, `cli/README.md`: Usage and architecture notes.
 
 ## Build, Test, and Development Commands
-- `make lint` – Ruff lint + autofix.
+- `make lint` – Ruff format, lint + autofix, MyPy, then `make audit`.
+- `make audit` – `uv audit`: fails on known vulnerabilities in the locked dependencies.
+- Dependencies: `uv lock` only resolves releases at least 3 days old (`exclude-newer` in `pyproject.toml`); this needs a recent uv.
 - Run locally: `GITHUB_TOKEN=... OPENAI_API_KEY=... PYTHONPATH=. python -m cli.main --repo owner/repo --pr 123 [--mode review|act] [--dry-run] [--debug 1]`.
 
 ## Coding Style & Naming Conventions
-- Python 3.12, 4‑space indent, `snake_case` for functions/variables, `PascalCase` for classes, constants `UPPER_SNAKE`.
+- Python 3.12–3.14 (`requires-python = ">=3.12,<3.15"`), 4‑space indent, `snake_case` for functions/variables, `PascalCase` for classes, constants `UPPER_SNAKE`.
 - Keep functions focused and small; prefer pure helpers in `cli/` modules.
 - Formatting and linting via Ruff; type hints required enough to pass MyPy (third‑party imports are ignored per `mypy.ini`).
 

@@ -45,3 +45,59 @@ def test_missing_prompt_fails_fast(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(Path, "read_text", fail)
     with pytest.raises(PromptError, match="review_panel.md"):
         load_panel_instructions(_make_review_config())
+
+
+def test_default_prompts_load_application_focus_after_base() -> None:
+    guidelines = load_guidelines(_make_review_config())
+    assert guidelines.index("## Output schema") < guidelines.index(
+        "# Application code review focus"
+    )
+    assert "Infrastructure-as-code" not in guidelines
+
+
+def test_iac_prompt_replaces_application_focus() -> None:
+    guidelines = load_guidelines(
+        ReviewConfig(github_token="t", repository="o/r", mode="review", prompts=("iac",))
+    )
+    assert "REVIEW COMMENT FORMAT (REPO STANDARD):" in guidelines
+    assert "# Infrastructure-as-code review focus" in guidelines
+    assert "try-with-resources" not in guidelines
+
+
+def test_prompt_names_accept_md_suffix() -> None:
+    def load(*prompts: str) -> str:
+        return load_guidelines(
+            ReviewConfig(github_token="t", repository="o/r", mode="review", prompts=prompts)
+        )
+
+    assert load("code_java.md", "iac.md") == load("code_java", "iac")
+
+
+def test_prompts_env_is_comma_separated_and_empty_falls_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cli.core.config import _config_values_from_environment
+
+    monkeypatch.setenv("DOTBOT_PROMPTS", " code_java, iac ,")
+    assert _config_values_from_environment()["prompts"] == ("code_java", "iac")
+    monkeypatch.setenv("DOTBOT_PROMPTS", "")
+    assert _config_values_from_environment()["prompts"] == ("code_java",)
+
+
+@pytest.mark.parametrize("name", ["../review", "IaC", "nope"])
+def test_unknown_or_unsafe_prompt_name_fails_fast(name: str) -> None:
+    config = ReviewConfig(github_token="t", repository="o/r", mode="review", prompts=(name,))
+    with pytest.raises(PromptError):
+        load_guidelines(config)
+
+
+def test_prompts_env_and_kwarg_reach_review_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DOTBOT_PROMPTS", "iac")
+    base = {"github_token": "t", "repository": "o/r", "pr_number": 1, "mode": "review"}
+    assert ReviewConfig.from_args(**base).prompts == ("iac",)
+    assert ReviewConfig.from_args(**base, prompts=["code_java", "iac"]).prompts == (
+        "code_java",
+        "iac",
+    )
+    assert ReviewConfig.from_args(**base, prompts="code_java, iac").prompts == ("code_java", "iac")
+    assert ReviewConfig.from_args(**base, prompts="").prompts == ("code_java",)

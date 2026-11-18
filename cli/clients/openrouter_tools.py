@@ -172,8 +172,14 @@ def is_reviewable_path(path: Path, repo_root: Path) -> bool:
         return False
     parts = resolved.relative_to(repo_root.resolve()).parts
     name = resolved.name.casefold()
+    kube_name = name.removesuffix(".yaml").removesuffix(".yml")
     return not (
         ".git" in parts
+        or ".kube" in parts
+        # Terraform state (incl. *.tfstate.backup) stores resource secrets in plain text.
+        or ".tfstate" in name
+        or kube_name == "kubeconfig"
+        or kube_name.endswith(".kubeconfig")
         or name == ".env"
         or (name.startswith(".env.") and name not in {".env.example", ".env.sample"})
         or name.endswith((".pem", ".key"))

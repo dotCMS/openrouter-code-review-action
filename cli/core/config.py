@@ -42,6 +42,7 @@ _CONFIG_OVERRIDE_KEYS = frozenset(
         "dry_run",
         "model_timeout_seconds",
         "additional_prompt",
+        "prompts",
         "repo_root",
         "context_dir_name",
         "allowed_commenter_associations",
@@ -49,6 +50,7 @@ _CONFIG_OVERRIDE_KEYS = frozenset(
     }
 )
 
+DEFAULT_PROMPTS = ("code_java",)
 _DEFAULT_ALLOWED_COMMENTER_ASSOCIATIONS = ("MEMBER", "OWNER", "COLLABORATOR")
 _VALID_COMMENTER_ASSOCIATIONS = frozenset(
     {
@@ -88,6 +90,7 @@ class _ReviewConfigValues(TypedDict):
     dry_run: bool
     model_timeout_seconds: int
     additional_prompt: str
+    prompts: tuple[str, ...]
     repo_root: Path | None
     context_dir_name: str
     allowed_commenter_associations: tuple[str, ...]
@@ -121,6 +124,8 @@ class ReviewConfig:
     # Wall-clock budget for a single reviewer model pass. 0 disables the cap.
     model_timeout_seconds: int = 900
     additional_prompt: str = ""
+    # Focus prompts appended to the base review guidelines (prompts/<name>.md).
+    prompts: tuple[str, ...] = DEFAULT_PROMPTS
     repo_root: Path | None = None
     context_dir_name: str = ".dotbot-context"
     allowed_commenter_associations: tuple[str, ...] = _DEFAULT_ALLOWED_COMMENTER_ASSOCIATIONS
@@ -425,6 +430,7 @@ def _config_values_from_environment() -> _ReviewConfigValues:
             os.environ.get("DOTBOT_MODEL_TIMEOUT_SECONDS"), default=900
         ),
         "additional_prompt": os.environ.get("DOTBOT_ADDITIONAL_PROMPT", "").strip(),
+        "prompts": _parse_model_list(os.environ.get("DOTBOT_PROMPTS")) or DEFAULT_PROMPTS,
         "repo_root": repo_root,
         "context_dir_name": ".dotbot-context",
         "allowed_commenter_associations": _parse_allowed_commenter_associations(
@@ -574,6 +580,12 @@ def _apply_config_overrides(values: _ReviewConfigValues, kwargs: Mapping[str, An
     additional_prompt = kwargs.get("additional_prompt")
     if additional_prompt is not None:
         values["additional_prompt"] = additional_prompt
+
+    prompts = kwargs.get("prompts")
+    if prompts is not None:
+        # A string is comma-separated, like DOTBOT_PROMPTS; tuple("iac") would split characters.
+        names = _parse_model_list(prompts) if isinstance(prompts, str) else tuple(prompts)
+        values["prompts"] = names or DEFAULT_PROMPTS
 
     repo_root = kwargs.get("repo_root")
     if repo_root is not None:

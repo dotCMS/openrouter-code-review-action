@@ -4,7 +4,8 @@ name = "dotbot-code-review-action"
 version = "0.0.0"
 description = "GitHub Action for dotbot autonomous PR reviews and edits"
 readme = "README.md"
-requires-python = ">=3.12"
+# <3.15: pydantic-core has no wheels for 3.15 yet and cannot build from source there.
+requires-python = ">=3.12,<3.15"
 dependencies = [
   "pydantic==2.12.5",
   "PyGithub==2.8.1",
@@ -14,6 +15,8 @@ dependencies = [
 [tool.uv]
 # Treat repo as non-packaged (no editable build performed by uv)
 package = false
+# Supply-chain cooldown: only resolve releases that have been public for 3 days.
+exclude-newer = "3 days"
 
 [dependency-groups]
 dev = [

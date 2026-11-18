@@ -422,6 +422,9 @@ def _invoke_review_cli(
     env["DOTBOT_REVIEW_EXPECTED_HEAD_SHA"] = pr.head_sha
     env["DOTBOT_REVIEW_EXPECTED_BASE_SHA"] = pr.base_sha
     env.pop("DOTBOT_REVIEW_STATUS_COMMENT_ID", None)
+    # Benchmark with the default focus prompts, as the Codex baseline does,
+    # whatever the caller's shell has set.
+    env.pop("DOTBOT_PROMPTS", None)
     proc = subprocess.run(
         cmd,
         cwd=str(REPO_ROOT),

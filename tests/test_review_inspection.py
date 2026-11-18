@@ -193,6 +193,13 @@ def test_panel_diff_uses_exact_commits_and_never_runs_external_diff(
         ".key",
         ".PEM",
         ".KEY",
+        "terraform.tfstate",
+        "envs/prod/terraform.tfstate.backup",
+        "PROD.TFSTATE",
+        "kubeconfig",
+        "kubeconfig.yaml",
+        "clusters/prod.kubeconfig",
+        ".kube/config",
     ],
 )
 def test_credential_file_changes_require_human_review_before_any_diff_contents(
@@ -494,3 +501,10 @@ def test_prior_evidence_reads_past_the_model_tool_output_limit(
         source_reader=lambda path: read_file_at_revision(root, revision, path),
     )
     assert prior[0].is_currently_applicable
+
+
+@pytest.mark.parametrize("path", ["envs/dev.tfvars", "main.tf", "pkg/kubeconfig.go", "values.yaml"])
+def test_ordinary_iac_files_stay_reviewable(tmp_path: Path, path: str) -> None:
+    from cli.clients.openrouter_tools import is_reviewable_path
+
+    assert is_reviewable_path(tmp_path / path, tmp_path)

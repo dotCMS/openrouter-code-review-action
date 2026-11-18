@@ -422,7 +422,7 @@ class ReviewWorkflow:
                 overall_correctness="patch is incorrect",
                 overall_explanation=(
                     "Automatic review was not performed: this PR changes credential paths "
-                    "(.env, .pem or .key). Human review is required. No PR file contents "
+                    "(.env, .pem, .key, Terraform state or kubeconfig). Human review is required. No PR file contents "
                     "were sent to a model; automatic approval and thread resolution are withheld."
                 ),
                 overall_confidence_score=None,
