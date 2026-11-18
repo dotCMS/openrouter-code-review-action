@@ -1,7 +1,10 @@
 name: dotbot code review
 
+# pull_request_target, not pull_request: the job definition below always comes
+# from the default branch, so a PR cannot change how its own review runs. The
+# PR's code is never checked out (see the checkout step).
 on:
-  pull_request:
+  pull_request_target:
     # review_requested fires both when a review is first requested AND when
     # it is re-requested, so one type covers both cases.
     types: [opened, synchronize, reopened, ready_for_review, review_requested]
@@ -14,9 +17,14 @@ jobs:
   review:
     # On review_requested, only run when the request targets the machine
     # user (re-requests land here too). All other trigger types pass through.
+    # Fork PRs are skipped: pull_request_target runs them with this repo's
+    # secrets and a write token, so the head.repo.fork guard must stay.
     if: >-
-      github.event.action != 'review_requested' ||
-      github.event.requested_reviewer.login == 'dotCMS-Machine-User'
+      github.event.pull_request.head.repo.fork == false &&
+      (
+        github.event.action != 'review_requested' ||
+        github.event.requested_reviewer.login == 'dotCMS-Machine-User'
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -24,6 +32,10 @@ jobs:
       issues: write
       statuses: write
     steps:
+      # Checks out the base branch. Do not add `ref:` for the PR head or merge
+      # commit: this job has secrets. fetch-depth 0 also fetches the PR's
+      # branch, so the action can read the head commit by SHA (git diff/show)
+      # without checking it out.
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0

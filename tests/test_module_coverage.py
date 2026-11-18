@@ -787,7 +787,22 @@ def test_review_action_uses_expected_model_and_drops_legacy_resume_cache() -> No
     ) in action_yaml
     # Review and Act are separate workflows: review runs only on PR events
     # so it reports as a genuine status check, Act only on /dotbot comments.
-    assert "on:\n  pull_request:" in review_workflow
+    # Review uses pull_request_target so its job definition always comes from
+    # the default branch; that event also runs fork PRs, so the job must skip
+    # them, and its checkout must stay on the base branch (no PR `ref:`).
+    review_definition = yaml.safe_load(review_workflow)
+    # PyYAML reads the bare `on` key as boolean True.
+    review_triggers = review_definition.get("on", review_definition.get(True))
+    assert set(review_triggers) == {"pull_request_target"}
+    review_job = review_definition["jobs"]["review"]
+    assert "github.event.pull_request.head.repo.fork == false" in review_job["if"]
+    checkouts = [
+        step
+        for step in review_job["steps"]
+        if str(step.get("uses", "")).startswith("actions/checkout@")
+    ]
+    assert checkouts
+    assert all("ref" not in (step.get("with") or {}) for step in checkouts)
     assert "issue_comment:" in act_workflow
     assert "openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}" in review_workflow
     assert "openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}" in act_workflow
