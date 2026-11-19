@@ -480,22 +480,23 @@ class OpenRouterClient:
                 file=sys.stderr,
                 flush=True,
             )
+        problem = None
         if (
             message.get("refusal")
             or message.get("tool_calls")
             or (not text.strip() and not isinstance(content, (str, type(None))))
         ):
             # Never let a correction replace a reply nobody could inspect.
-            raise DotBotExecutionError(
-                "OpenRouter returned a refusal, tool calls or non-text structured output"
-            )
-        if finish not in (None, "stop"):
+            problem = "OpenRouter returned a refusal, tool calls or non-text structured output"
+        elif finish not in (None, "stop"):
             # A cut-off, filtered or failed turn is incomplete, so never validate or correct it.
-            if text:
-                messages.append({"role": "assistant", "content": text})
-            raise DotBotExecutionError(
+            problem = (
                 f"OpenRouter structured turn ended with finish_reason={finish} ({len(text)} chars)"
             )
+        if problem is not None:
+            if text:
+                messages.append({"role": "assistant", "content": text})  # saved for diagnosis
+            raise DotBotExecutionError(problem)
         return text
 
     # ------------------------------------------------------------------

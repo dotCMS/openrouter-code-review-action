@@ -721,6 +721,13 @@ def test_rejected_reply_that_may_hold_a_decision_fails_closed(reply: str) -> Non
 def test_fence_is_only_stripped_around_the_whole_reply() -> None:
     assert PanelTurn.parse("```\n" + _turn() + "\n```", set()).review.findings == []
     assert PanelTurn.parse("```json\r\n" + _turn() + "\r\n```\r\n", set()).review.findings == []
+    with pytest.raises(ReviewContractError, match="NaN is not valid JSON"):
+        PanelTurn.parse(
+            "```json\n"
+            + _turn().replace('"overall_confidence_score": 0.9', '"overall_confidence_score": NaN')
+            + "\n```",
+            set(),
+        )
     # JSON is never pulled out of prose; the embedded object could hold findings, so no retry.
     with pytest.raises(ReviewContractError, match="not valid JSON") as caught:
         PanelTurn.parse("Here you go:\n```json\n" + _turn() + "\n```", set())

@@ -768,3 +768,25 @@ def test_abnormal_turn_keeps_the_partial_reply_in_the_saved_thread(tmp_path: Pat
 
     [saved] = list((tmp_path / "threads").glob("*.json"))
     assert '{\\"overall_corr' in saved.read_text()
+
+
+def test_refused_reply_text_is_kept_in_the_saved_thread(tmp_path: Path) -> None:
+    reply = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "partial refusal text",
+                    "refusal": "no",
+                },
+                "finish_reason": "stop",
+            }
+        ]
+    }
+    client = _client(tmp_path, _ScriptedTransport([_text_response("thinking"), reply]))
+
+    with pytest.raises(DotBotExecutionError, match="refusal"):
+        client.execute_structured("review", output_schema={"type": "object"})
+
+    [saved] = list((tmp_path / "threads").glob("*.json"))
+    assert "partial refusal text" in saved.read_text()

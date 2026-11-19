@@ -212,11 +212,15 @@ class PanelTurn:
         if not output.strip():
             raise ReviewContractError("Panel response is empty")
         try:
-            payload = json.loads(output, object_pairs_hook=_unique_json_object)
+            payload = json.loads(
+                output, object_pairs_hook=_unique_json_object, parse_constant=_reject_constant
+            )
         except json.JSONDecodeError as exc:
             raise ReviewContractError(
                 f"Panel response is not valid JSON: {exc.msg} at line {exc.lineno} column {exc.colno}"
             ) from exc
+        except ValueError as exc:  # NaN or Infinity
+            raise ReviewContractError(f"Panel response is not valid JSON: {exc}") from exc
         if not isinstance(payload, dict) or set(payload) != set(PANEL_OUTPUT_SCHEMA["required"]):
             raise ReviewContractError("Panel response has missing or unknown fields")
         for field in ("message", "security_summary", "overall_explanation"):
