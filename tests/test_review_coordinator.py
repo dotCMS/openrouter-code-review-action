@@ -549,3 +549,45 @@ def test_panel_policy_overrides_nonblocking_verdict_guidance(tmp_path: Path, pri
         PanelTurn.parse(_turn(findings=[finding]), set()).review.overall_correctness
         == "patch is incorrect"
     )
+
+
+def test_cost_summary_totals_per_model_and_flags_missing_cost(tmp_path: Path) -> None:
+    panel, clients = _panel(_config(tmp_path), lambda prompt, kwargs: _turn())
+    for client, passes, cost in ((clients["primary"], 3, 0.25), (clients["secondary"], 2, 0.5)):
+        client.billed_passes, client.billed_cost_usd = passes, cost  # type: ignore[attr-defined]
+
+    assert panel.cost_summary() == (
+        "$0.75 (primary $0.25 over 3 passes; secondary $0.50 over 2 passes)"
+    )
+
+    clients["secondary"].billed_cost_usd = None  # type: ignore[attr-defined]
+    assert panel.cost_summary() == (
+        "cost unavailable (primary $0.25 over 3 passes; secondary cost unavailable over 2 passes)"
+    )
+
+
+def test_cost_summary_marks_reviewer_still_running_after_abort_unavailable(
+    tmp_path: Path,
+) -> None:
+    started, release = threading.Event(), threading.Event()
+
+    def handler(prompt: str, kwargs: dict[str, Any]) -> str:
+        if kwargs["model_name"] == "primary":
+            started.set()
+            release.wait(5)
+            return _turn()
+        started.wait(5)
+        raise DotBotExecutionError("OpenRouter HTTP 502")
+
+    panel, clients = _panel(_config(tmp_path), handler)
+    for client in clients.values():
+        client.billed_passes, client.billed_cost_usd = 1, 0.5  # type: ignore[attr-defined]
+    try:
+        with pytest.raises(DotBotExecutionError):
+            _run(panel, tmp_path)
+        # Primary sits between requests, so its counters look settled but are not final.
+        assert panel.cost_summary() == (
+            "cost unavailable (primary cost unavailable over 1 pass; secondary $0.50 over 1 pass)"
+        )
+    finally:
+        release.set()

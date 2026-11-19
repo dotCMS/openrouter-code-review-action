@@ -96,8 +96,10 @@ class OpenRouterStreamPrinter:
         debug: Callable[[int, str], None] | None = None,
         on_text_delta: Callable[[str], None] | None = None,
         on_reasoning_delta: Callable[[str], None] | None = None,
+        on_usage: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self._stream_to_logs = stream_to_logs
+        self._on_usage = on_usage
         self._stdout: IO[str] = stdout if stdout is not None else sys.stdout
         self._debug = debug or (lambda _level, _message: None)
         self._sinks = _DeltaSinks(
@@ -140,6 +142,9 @@ class OpenRouterStreamPrinter:
                     or emitted_anything
                 )
         finally:
+            # Report usage even when the stream breaks after the usage frame arrived.
+            if self._on_usage is not None and result.usage is not None:
+                self._on_usage(result.usage)
             if self._stream_to_logs and emitted_anything:
                 # Commit the final partial line so the GH Actions log
                 # buffer flushes the last token.

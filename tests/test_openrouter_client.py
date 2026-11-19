@@ -479,6 +479,129 @@ def test_no_usage_summary_without_usage_data(
     assert "[openrouter-usage]" not in capsys.readouterr().err
 
 
+def test_cost_accumulates_across_passes_and_logs_per_pass(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    responses = [
+        _tool_response("call-1", "run_command", json.dumps({"command": "git status"})),
+        _text_response("first"),
+        _text_response("second"),
+    ]
+    for response, cost in zip(responses, (0.25, 0.5, 1), strict=True):
+        response["usage"] = {"prompt_tokens": 1, "completion_tokens": 1, "cost": cost}
+    client = _client(tmp_path, _ScriptedTransport(responses), debug_level=1)
+
+    client.execute_text("pass one")
+    client.execute_text("pass two")
+
+    assert client.billed_passes == 2
+    assert client.billed_cost_usd == pytest.approx(1.75)
+    stderr = capsys.readouterr().err
+    assert "requests=2 prompt_tokens=2 completion_tokens=2 total_tokens=0 cost_usd=0.750000" in (
+        stderr
+    )
+    assert "requests=1 prompt_tokens=1 completion_tokens=1 total_tokens=0 cost_usd=1.000000" in (
+        stderr
+    )
+
+
+@pytest.mark.parametrize("cost", [None, "0.1", True, float("inf"), float("nan"), 10**400])
+def test_missing_or_non_numeric_cost_is_unknown_not_zero(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], cost: Any
+) -> None:
+    priced, unpriced = _text_response("first"), _text_response("second")
+    priced["usage"] = {"prompt_tokens": 1, "cost": 0.5}
+    unpriced["usage"] = {"prompt_tokens": 1} if cost is None else {"prompt_tokens": 1, "cost": cost}
+    client = _client(tmp_path, _ScriptedTransport([priced, unpriced]), debug_level=1)
+
+    client.execute_text("priced")
+    assert client.billed_cost_usd == 0.5
+    client.execute_text("unpriced")
+
+    assert client.billed_cost_usd is None
+    assert "cost_usd=unknown" in capsys.readouterr().err
+
+
+def test_failed_and_correction_requests_still_count(tmp_path: Path) -> None:
+    def failing(payload: dict[str, Any]) -> dict[str, Any]:
+        raise DotBotExecutionError("OpenRouter HTTP 502")
+
+    client = _client(tmp_path, _ScriptedTransport([]))
+    client._transport = failing
+    with pytest.raises(DotBotExecutionError):
+        client.execute_text("boom")
+    # The request was sent but never reported a cost.
+    assert (client.billed_passes, client.billed_cost_usd) == (1, None)
+
+    responses = [_text_response("investigate"), _text_response("bad"), _text_response("good")]
+    for response in responses:
+        response["usage"] = {"cost": 0.1}
+    client = _client(tmp_path, _ScriptedTransport(responses))
+
+    def validate(content: str) -> None:
+        if content == "bad":
+            raise CorrectableReviewError("fix it")
+
+    client.execute_structured("review", output_schema={"type": "object"}, output_validator=validate)
+    assert client.billed_cost_usd == pytest.approx(0.3)
+    assert client.billed_passes == 2  # the correction attempt is a pass of its own
+
+
+def test_priced_response_that_fails_validation_keeps_its_cost(tmp_path: Path) -> None:
+    client = _client(tmp_path, _ScriptedTransport([{"choices": [], "usage": {"cost": 0.2}}]))
+
+    with pytest.raises(DotBotExecutionError, match="no choices"):
+        client.execute_text("boom")
+
+    assert client.billed_cost_usd == pytest.approx(0.2)
+
+
+def test_cost_only_usage_still_logs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    response = _text_response("done")
+    response["usage"] = {"cost": 0.5}
+    client = _client(tmp_path, _ScriptedTransport([response]), debug_level=1)
+
+    client.execute_text("inspect")
+
+    assert "total_tokens=0 cost_usd=0.500000" in capsys.readouterr().err
+
+
+def test_stream_broken_after_usage_frame_keeps_cost(tmp_path: Path) -> None:
+    def _stream_transport(payload: dict[str, Any]) -> Any:
+        usage = {"choices": [], "usage": {"prompt_tokens": 3, "cost": 0.07}}
+        yield f"data: {json.dumps(usage)}\n\n".encode()
+        raise DotBotExecutionError("OpenRouter request failed: connection reset")
+
+    client = OpenRouterClient(
+        _config(tmp_path, stream_output=True),
+        stream_transport=_stream_transport,
+        thread_store=OpenRouterThreadStore(tmp_path / "threads"),
+    )
+
+    with pytest.raises(DotBotExecutionError, match="connection reset"):
+        client.execute_text("inspect")
+    assert client.billed_cost_usd == pytest.approx(0.07)
+
+
+def test_streamed_final_usage_chunk_reports_cost(tmp_path: Path) -> None:
+    def _stream_transport(payload: dict[str, Any]) -> Any:
+        delta = {"index": 0, "delta": {"content": "done"}, "finish_reason": "stop"}
+        yield f"data: {json.dumps({'choices': [delta]})}\n\n".encode()
+        # OpenRouter's usage chunk repeats finish_reason with an empty delta.
+        final = {**delta, "delta": {"content": ""}}
+        usage = {"choices": [final], "usage": {"prompt_tokens": 3, "cost": 0.0042}}
+        yield f"data: {json.dumps(usage)}\n\ndata: [DONE]\n\n".encode()
+
+    client = OpenRouterClient(
+        _config(tmp_path, stream_output=True),
+        stream_transport=_stream_transport,
+        thread_store=OpenRouterThreadStore(tmp_path / "threads"),
+    )
+
+    assert client.execute_text("inspect") == "done"
+    assert client.billed_cost_usd == pytest.approx(0.0042)
+
+
 def _reasoning_chunk(reasoning: str) -> dict[str, Any]:
     return {"choices": [{"index": 0, "delta": {"reasoning": reasoning}}]}
 

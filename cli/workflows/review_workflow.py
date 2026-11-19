@@ -76,6 +76,17 @@ class ReviewWorkflowResult:
     summary: ReviewSummary
 
 
+def _append_step_summary(text: str) -> None:
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as handle:
+            handle.write(text)
+    except OSError as exc:
+        print(f"Warning: failed to write GITHUB_STEP_SUMMARY: {exc}", file=sys.stderr)
+
+
 def _build_review_summary(
     review: ReviewRunResult,
     summary: ReviewSummary,
@@ -399,6 +410,7 @@ class ReviewWorkflow:
         artifacts: ReviewArtifacts,
     ) -> ReviewWorkflowResult:
         source_cache: dict[str, str | None] = {}
+        cost: str | None = None
 
         def read_source(path: str) -> str | None:
             if path not in source_cache:
@@ -464,12 +476,17 @@ class ReviewWorkflow:
                 )
 
             panel = ReviewCoordinator(self.config, factory)
-            review = panel.run(
-                prompt,
-                prior_comments=snapshots.prior_dotbot_comments,
-                transcript_path=artifacts.base_dir / "review-discussion.json",
-                head_sha=head_sha,
-            )
+            try:
+                review = panel.run(
+                    prompt,
+                    prior_comments=snapshots.prior_dotbot_comments,
+                    transcript_path=artifacts.base_dir / "review-discussion.json",
+                    head_sha=head_sha,
+                )
+            finally:
+                # Failed and timed-out passes are billed too, so report before re-raising.
+                cost = panel.cost_summary()
+                _append_step_summary(f"### dotbot review cost\n\n{cost}\n")
         self._assert_panel_revision(pr.number, head_sha, base_sha)
         posting = self._post_results(review, changed_files, pr, head_sha, rename_map)
         summary = self._build_summary(review)
@@ -486,6 +503,7 @@ class ReviewWorkflow:
             + ", ".join(self.config.selected_review_models)
             + f"\nDecision policy: {self.config.review_decision_policy}"
             + f"\nReviewed base: `{base_sha}`"
+            + (f"\nCost: {cost}" if cost is not None else "")
         )
         self._publish_summary(pr, text)
         result = ReviewWorkflowResult(review, posting, summary)
