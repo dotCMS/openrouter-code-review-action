@@ -126,6 +126,23 @@ def _carries_decision(text: str) -> bool:
     )
 
 
+def _explicit_rejects(text: str) -> set[str]:
+    """Ledger IDs a retried reply explicitly rejected; its correction must keep them rejected."""
+    fenced = _FENCED_REPLY.match(text)
+    try:
+        payload = json.loads(fenced.group(1) if fenced else text)
+    except ValueError:
+        return set()
+    dispositions = payload.get("dispositions") if isinstance(payload, dict) else None
+    if not isinstance(dispositions, dict):
+        return set()
+    return {
+        issue_id
+        for issue_id, item in dispositions.items()
+        if isinstance(item, dict) and item.get("action") == "reject"
+    }
+
+
 def _log_safe_failure(error: BaseException) -> str:
     """The part of a reviewer failure that may be logged with model streaming off."""
     text = " ".join(str(error).split())
@@ -436,10 +453,11 @@ class ReviewCoordinator:
 
         def worker(model: str) -> None:
             protected: PanelTurn | None = None
+            locked_rejects: set[str] = set()
             validations = 0
 
             def validate(output: str) -> None:
-                nonlocal protected, validations
+                nonlocal protected, locked_rejects, validations
                 validations += 1
                 try:
                     turn = PanelTurn.parse(output, issue_ids)
@@ -447,6 +465,8 @@ class ReviewCoordinator:
                     if isinstance(exc, _PanelVerdictConflict) and protected is None:
                         protected = exc.turn
                     correctable = validations == 1 and isinstance(exc, CorrectableReviewError)
+                    if correctable:
+                        locked_rejects = _explicit_rejects(output)
                     self._log_rejected_reply(model, phase, validations, exc, output, correctable)
                     if correctable and self.config.stream_output:
                         print(
@@ -456,9 +476,14 @@ class ReviewCoordinator:
                             flush=True,
                         )
                     raise
-                if protected is not None and (
-                    turn.review.findings != protected.review.findings
-                    or turn.dispositions != protected.dispositions
+                if (
+                    protected is not None
+                    and (
+                        turn.review.findings != protected.review.findings
+                        or turn.dispositions != protected.dispositions
+                    )
+                ) or any(
+                    turn.dispositions.get(issue_id) is not False for issue_id in locked_rejects
                 ):
                     error = ReviewContractError(
                         "Correction changed findings or disposition actions"

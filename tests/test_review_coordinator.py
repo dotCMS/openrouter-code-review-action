@@ -780,3 +780,38 @@ def test_failure_detail_names_own_errors_without_provider_bodies(
 def test_rejected_reply_without_a_possible_decision_is_correctable(reply: str) -> None:
     with pytest.raises(CorrectableReviewError):
         PanelTurn.parse(reply, set())
+
+
+@pytest.mark.parametrize("keep_reject", [True, False])
+def test_correction_cannot_flip_an_explicit_reject_vote(tmp_path: Path, keep_reject: bool) -> None:
+    prior = PriorDotBotReviewComment(
+        id="prior",
+        thread_id="thread",
+        path="src.py",
+        line=1,
+        body="Prior issue",
+        current_code="authorize(user)",
+        is_currently_applicable=True,
+    )
+
+    def handler(prompt: str, kwargs: dict[str, Any]) -> str:
+        if kwargs["model_name"] != "primary" or "Phase: investigation." not in prompt:
+            return _turn(votes={item["issue_id"]: False for item in _ledger(prompt)})
+        # First reply: a shape error (empty security summary) next to an explicit reject.
+        first = json.loads(_turn(votes={"P1": False}))
+        first["security_summary"] = ""
+        validator = kwargs["output_validator"]
+        with pytest.raises(CorrectableReviewError):
+            validator(json.dumps(first))
+        corrected = _turn(votes={"P1": not keep_reject}, correct=keep_reject)
+        validator(corrected)
+        return corrected
+
+    panel, _ = _panel(_config(tmp_path), handler)
+    if keep_reject:
+        assert _run(panel, tmp_path, [prior]).carried_forward_comment_ids == []
+    else:
+        with pytest.raises(
+            DotBotExecutionError, match="Correction changed findings or disposition"
+        ):
+            _run(panel, tmp_path, [prior])
