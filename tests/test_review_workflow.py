@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -958,3 +958,91 @@ def test_host_evidence_failures_abort_before_any_publication(
     assert not github.inline_comments
     assert not github.resolved_thread_ids
     assert not pr.as_issue().created_comments
+
+
+def _priced_openrouter_factory(tmp_path: Path, *, fail_model: str | None = None) -> Any:
+    import threading
+
+    from cli.clients.openrouter_client import OpenRouterClient
+    from cli.clients.openrouter_thread_store import OpenRouterThreadStore
+
+    survivor_priced = threading.Event()
+
+    def factory(config: ReviewConfig) -> Any:
+        def transport(payload: dict[str, Any]) -> dict[str, Any]:
+            if "response_format" not in payload:
+                text = "investigated"
+            elif config.review_model == fail_model:
+                # Fail only once the other reviewer has a priced schema turn.
+                survivor_priced.wait(5)
+                raise DotBotExecutionError("OpenRouter HTTP 502")
+            else:
+                text = _panel_response(_correct_response())
+            if "response_format" in payload:
+                survivor_priced.set()
+            return {
+                "choices": [{"message": {"content": text}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "cost": 0.01},
+            }
+
+        return OpenRouterClient(
+            replace(config, openrouter_api_key="test-key"),
+            transport=transport,
+            thread_store=OpenRouterThreadStore(tmp_path / "threads"),
+        )
+
+    return factory
+
+
+def test_panel_summary_and_step_summary_report_review_cost(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "src.py").write_text("new\n")
+    step_summary = tmp_path / "step-summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(step_summary))
+    pr = _FakePR()
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path, review_models=("secondary",)),
+        github_client=cast(Any, _FakeGitHubClient(pr)),
+        model_client_factory=_priced_openrouter_factory(tmp_path),
+    )
+    monkeypatch.setattr(workflow, "_panel_diff", lambda *args: "pinned diff")
+    _patch_approval(monkeypatch)
+
+    workflow.process_review(7)
+
+    # Two discussion rounds: three passes per model, two $0.01 requests per pass.
+    primary = workflow.config.selected_review_models[0]
+    cost = f"$0.12 ({primary} $0.06 over 3 passes; secondary $0.06 over 3 passes)"
+    summary = pr.as_issue().created_comments[-1]
+    assert summary.startswith(SUMMARY_MARKER)
+    assert pr.base is not None
+    assert f"\nReviewed base: `{pr.base.sha}`\nCost: {cost}" in summary
+    assert step_summary.read_text() == f"### dotbot review cost\n\n{cost}\n"
+
+
+def test_failed_panel_still_writes_step_summary_cost(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / "src.py").write_text("new\n")
+    step_summary = tmp_path / "step-summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(step_summary))
+    pr = _FakePR()
+    workflow = ReviewWorkflow(
+        _make_config(tmp_path, review_models=("secondary",)),
+        github_client=cast(Any, _FakeGitHubClient(pr)),
+        model_client_factory=_priced_openrouter_factory(tmp_path, fail_model="secondary"),
+    )
+    monkeypatch.setattr(workflow, "_panel_diff", lambda *args: "pinned diff")
+
+    with pytest.raises(DotBotExecutionError):
+        workflow.process_review(7)
+
+    assert pr.as_issue().created_comments == []
+    # The primary may still be finishing its pass when the panel aborts; then it is unavailable too.
+    primary = workflow.config.selected_review_models[0]
+    assert step_summary.read_text() in {
+        "### dotbot review cost\n\ncost unavailable "
+        f"({primary} {shown} over 1 pass; secondary cost unavailable over 1 pass)\n"
+        for shown in ("$0.02", "cost unavailable")
+    }

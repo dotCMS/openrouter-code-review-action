@@ -24,3 +24,9 @@ def _dummy_model_api_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+
+@pytest.fixture(autouse=True)
+def _no_ci_step_summary(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep tests from appending to the real GitHub Actions step summary in CI."""
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)

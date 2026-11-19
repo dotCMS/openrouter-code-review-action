@@ -172,6 +172,8 @@ class ReviewCoordinator:
         self.issues: dict[str, PanelIssue] = {}
         self._finding_ids: dict[str, str] = {}
         self.transcript: list[dict[str, Any]] = []
+        # Models with a pass still running; their billed cost is not final.
+        self._in_flight: set[str] = set()
 
     def run(
         self,
@@ -275,6 +277,18 @@ class ReviewCoordinator:
             carried_forward=carried,
         )
 
+    def cost_summary(self) -> str:
+        """Billed cost per model; any pass without a reported cost makes the total unavailable."""
+        total: float | None = 0.0
+        parts = []
+        for model, client in self.clients.items():
+            passes = getattr(client, "billed_passes", 0)
+            cost = None if model in self._in_flight else getattr(client, "billed_cost_usd", None)
+            total = None if cost is None or total is None else total + cost
+            shown = "cost unavailable" if cost is None else f"${cost:,.2f}"
+            parts.append(f"{model} {shown} over {passes} pass{'' if passes == 1 else 'es'}")
+        return f"{'cost unavailable' if total is None else f'${total:,.2f}'} ({'; '.join(parts)})"
+
     def _register_finding(self, finding: ReviewFinding) -> str:
         raw = finding.code_location.absolute_file_path
         root = self.config.resolved_repo_root
@@ -369,11 +383,14 @@ class ReviewCoordinator:
                     sandbox_mode="read-only",
                     resume_thread_id=None,
                 )
-                completed.put((model, PanelTurn.parse(output, issue_ids)))
+                result: PanelTurn | BaseException = PanelTurn.parse(output, issue_ids)
             except BaseException as exc:
-                completed.put((model, exc))
+                result = exc
+            self._in_flight.discard(model)
+            completed.put((model, result))
 
         deadline = time.monotonic() + self.config.model_timeout_seconds
+        self._in_flight.update(participants)
         for model in participants:
             threading.Thread(target=worker, args=(model,), daemon=True).start()
         turns: dict[str, PanelTurn] = {}

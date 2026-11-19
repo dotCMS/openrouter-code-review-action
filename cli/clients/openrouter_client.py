@@ -144,6 +144,12 @@ class OpenRouterClient:
         self._review_head_sha = review_head_sha
         self._usage_totals: dict[str, int] = {}
         self._request_count = 0
+        # Client-lifetime billing, kept across passes (failed ones included).
+        self.billed_passes = 0
+        self._billed_requests = 0
+        self._costed_requests = 0
+        self._cost_usd = 0.0
+        self._window_start = (0, 0, 0.0)
 
     # ------------------------------------------------------------------
     # Observability (usage / request timing)
@@ -152,6 +158,19 @@ class OpenRouterClient:
     def _begin_usage_window(self) -> None:
         self._usage_totals = {}
         self._request_count = 0
+        self.billed_passes += 1
+        self._window_start = (self._billed_requests, self._costed_requests, self._cost_usd)
+
+    @property
+    def billed_cost_usd(self) -> float | None:
+        """Total OpenRouter cost, or None when any sent request has not reported one."""
+        return self._cost_usd if self._costed_requests == self._billed_requests else None
+
+    def _window_cost_usd(self) -> float | None:
+        requests, costed, cost = self._window_start
+        if self._billed_requests - requests != self._costed_requests - costed:
+            return None
+        return self._cost_usd - cost
 
     def _accumulate_usage(self, usage: dict[str, Any] | None) -> None:
         if not isinstance(usage, dict):
@@ -160,12 +179,15 @@ class OpenRouterClient:
             value = usage.get(key)
             if isinstance(value, int):
                 self._usage_totals[key] = self._usage_totals.get(key, 0) + value
+        cost = usage.get("cost")
+        if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+            self._cost_usd += cost
+            self._costed_requests += 1
 
     def _log_request(
         self, result: StreamingResult, *, model_name: str | None, elapsed: float
     ) -> None:
         self._request_count += 1
-        self._accumulate_usage(result.usage)
         self._debug(
             1,
             f"[openrouter-request] model={self._resolved_model(model_name, online_suffix=False)} "
@@ -177,12 +199,14 @@ class OpenRouterClient:
         if not self._usage_totals:
             return
         model = self._resolved_model(model_name, online_suffix=False)
+        cost = self._window_cost_usd()
         self._debug(
             1,
             f"[openrouter-usage] model={model} requests={self._request_count} "
             f"prompt_tokens={self._usage_totals.get('prompt_tokens', 0)} "
             f"completion_tokens={self._usage_totals.get('completion_tokens', 0)} "
-            f"total_tokens={self._usage_totals.get('total_tokens', 0)}",
+            f"total_tokens={self._usage_totals.get('total_tokens', 0)} "
+            f"cost_usd={'unknown' if cost is None else f'{cost:.6f}'}",
         )
 
     # ------------------------------------------------------------------
@@ -271,6 +295,7 @@ class OpenRouterClient:
                     raise DotBotExecutionError(
                         "Model timeout reached before output correction"
                     ) from exc
+                self.billed_passes += 1  # a correction attempt is a billed pass of its own
                 messages.append(
                     {
                         "role": "user",
@@ -351,6 +376,7 @@ class OpenRouterClient:
             "forcing a final answer",
         )
         messages.append({"role": "user", "content": _TOOL_ITERATION_LIMIT_MESSAGE})
+        started = time.monotonic()
         result = self._agent_request(
             messages,
             model_name=model_name,
@@ -358,6 +384,7 @@ class OpenRouterClient:
             stream_enabled=stream_enabled,
             include_tools=False,
         )
+        self._log_request(result, model_name=model_name, elapsed=time.monotonic() - started)
         messages.append(_assistant_message(text=result.text, tool_calls=None))
         return result.text
 
@@ -409,9 +436,6 @@ class OpenRouterClient:
         started = time.monotonic()
         response = self._request(payload)
         elapsed = time.monotonic() - started
-        usage = response.get("usage")
-        if isinstance(usage, dict):
-            self._accumulate_usage(usage)
         self._request_count += 1
         self._debug(
             1,
@@ -435,10 +459,12 @@ class OpenRouterClient:
 
     def _request(self, payload: dict[str, Any]) -> dict[str, Any]:
         self._require_api_key()
+        self._billed_requests += 1
         if self._transport is not None:
             response = self._transport(payload)
             if not isinstance(response, dict):
                 raise DotBotExecutionError("OpenRouter transport returned a non-object response")
+            self._accumulate_usage(response.get("usage"))
             return response
 
         body = json.dumps(payload).encode("utf-8")
@@ -458,10 +484,13 @@ class OpenRouterClient:
             raise DotBotExecutionError(f"OpenRouter request failed: {exc}") from exc
         if not isinstance(decoded, dict):
             raise DotBotExecutionError("OpenRouter response was not a JSON object")
+        # Count usage before callers validate choices, so a rejected response keeps its cost.
+        self._accumulate_usage(decoded.get("usage"))
         return decoded
 
     def _request_stream(self, payload: dict[str, Any]) -> StreamingResult:
         self._require_api_key()
+        self._billed_requests += 1
         if self._stream_transport is not None:
             chunks = self._stream_transport({**payload, "stream": True})
         else:
@@ -478,6 +507,7 @@ class OpenRouterClient:
             on_reasoning_delta=_on_reasoning,
         )
         result = printer.consume_bytes(chunks)
+        self._accumulate_usage(result.usage)
         if reasoning_chars:
             self._debug(
                 1,
