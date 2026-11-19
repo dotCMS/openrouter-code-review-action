@@ -721,6 +721,11 @@ def test_rejected_reply_that_may_hold_a_decision_fails_closed(reply: str) -> Non
 def test_fence_is_only_stripped_around_the_whole_reply() -> None:
     assert PanelTurn.parse("```\n" + _turn() + "\n```", set()).review.findings == []
     assert PanelTurn.parse("```json\r\n" + _turn() + "\r\n```\r\n", set()).review.findings == []
+    overflow = _turn().replace(
+        '"overall_confidence_score": 0.9', '"overall_confidence_score": 1e309'
+    )
+    with pytest.raises(ReviewContractError, match="1e309 overflows"):
+        PanelTurn.parse(overflow, set())
     with pytest.raises(ReviewContractError, match="NaN is not valid JSON"):
         PanelTurn.parse(
             "```json\n"

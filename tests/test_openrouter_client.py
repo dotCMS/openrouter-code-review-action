@@ -658,7 +658,7 @@ def test_in_body_error_without_choices_is_described(
         "error": {
             "code": 502,
             "message": "Provider\nreturned error",
-            "metadata": {"error_type": "provider_error"},
+            "metadata": {"error_type": "provider_unavailable"},
         }
     }
     client = _client(tmp_path, _ScriptedTransport([error]))
@@ -667,7 +667,7 @@ def test_in_body_error_without_choices_is_described(
         client.execute_text("inspect")
     # The exception may be posted to a PR (act mode), so the provider's free text never enters it.
     assert str(caught.value) == (
-        "OpenRouter returned an error instead of choices: code=502 type=provider_error"
+        "OpenRouter returned an error instead of choices: code=502 type=provider_unavailable"
     )
     assert "Provider" not in capsys.readouterr().err
 
@@ -704,6 +704,14 @@ def test_provider_fields_cannot_inject_workflow_commands(
     with pytest.raises(DotBotExecutionError) as caught:
         client.execute_text("inspect")
     assert "\n" not in str(caught.value)
+
+    # Lowercase text that is not a documented error type never reaches the exception.
+    undocumented: dict[str, Any] = {
+        "error": {"code": 400, "metadata": {"error_type": "contact_attacker_at_evil"}}
+    }
+    client = _client(tmp_path, _ScriptedTransport([undocumented]))
+    with pytest.raises(DotBotExecutionError, match="code=400 type=unknown$"):
+        client.execute_text("inspect")
 
 
 @pytest.mark.parametrize("finish", [["stop"], {"reason": "stop"}, 7])

@@ -37,7 +37,6 @@ from __future__ import annotations
 
 import json
 import math
-import re
 import sys
 import time
 import urllib.error
@@ -665,6 +664,41 @@ class OpenRouterClient:
 _KNOWN_FINISH_REASONS = {None, "stop", "length", "content_filter", "error", "tool_calls"}
 
 
+# OpenRouter's documented typed error codes (docs: api-reference/errors, "Typed error codes").
+# Only these may appear in an exception that act mode can post to a PR.
+_OPENROUTER_ERROR_TYPES = frozenset(
+    {
+        "authentication",
+        "content_policy_violation",
+        "context_length_exceeded",
+        "image_download_failed",
+        "image_not_found",
+        "image_too_large",
+        "image_too_small",
+        "invalid_image",
+        "invalid_prompt",
+        "invalid_request",
+        "max_tokens_exceeded",
+        "not_found",
+        "payload_too_large",
+        "payment_required",
+        "permission_denied",
+        "precondition_failed",
+        "provider_overloaded",
+        "provider_unavailable",
+        "rate_limit_exceeded",
+        "refusal",
+        "server",
+        "string_too_long",
+        "timeout",
+        "token_limit_exceeded",
+        "unmapped",
+        "unprocessable",
+        "unsupported_image_format",
+    }
+)
+
+
 def _missing_choices_error(response: dict[str, Any]) -> DotBotExecutionError:
     """Describe a response without choices, using OpenRouter's in-body error when present.
 
@@ -680,7 +714,7 @@ def _missing_choices_error(response: dict[str, Any]) -> DotBotExecutionError:
     return DotBotExecutionError(
         "OpenRouter returned an error instead of choices: "
         f"code={code if type(code) is int and 100 <= code <= 599 else 'unknown'} "
-        f"type={error_type if isinstance(error_type, str) and re.fullmatch(r'[a-z_]{1,60}', error_type) else 'unknown'}"
+        f"type={error_type if error_type in _OPENROUTER_ERROR_TYPES else 'unknown'}"
     )
 
 

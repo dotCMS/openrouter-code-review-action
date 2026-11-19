@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import queue
 import re
@@ -99,7 +100,10 @@ def _carries_decision(text: str) -> bool:
         return False
     try:
         payload = json.loads(
-            text, object_pairs_hook=_unique_json_object, parse_constant=_reject_constant
+            text,
+            object_pairs_hook=_unique_json_object,
+            parse_constant=_reject_constant,
+            parse_float=_finite_float,
         )
     except (ReviewContractError, ValueError):
         return True
@@ -134,6 +138,13 @@ def _no_workflow_commands(line: str) -> str:
     The replacement is a JSON escape, so a JSON payload on the line still decodes the same.
     """
     return line.replace("##[", "#\\u0023[")
+
+
+def _finite_float(literal: str) -> float:
+    value = float(literal)
+    if not math.isfinite(value):
+        raise ValueError(f"{literal} overflows to {value}")  # e.g. 1e309 becomes Infinity
+    return value
 
 
 def _reject_constant(name: str) -> None:
@@ -213,7 +224,10 @@ class PanelTurn:
             raise ReviewContractError("Panel response is empty")
         try:
             payload = json.loads(
-                output, object_pairs_hook=_unique_json_object, parse_constant=_reject_constant
+                output,
+                object_pairs_hook=_unique_json_object,
+                parse_constant=_reject_constant,
+                parse_float=_finite_float,
             )
         except json.JSONDecodeError as exc:
             raise ReviewContractError(
