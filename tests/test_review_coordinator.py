@@ -727,7 +727,22 @@ def test_fence_is_only_stripped_around_the_whole_reply() -> None:
         ),
         (
             DotBotExecutionError("OpenRouter request failed: timed out\nSECRET-MODEL"),
-            "DotBotExecutionError: OpenRouter request failed: timed out [REDACTED]",
+            "DotBotExecutionError: OpenRouter request failed",
+        ),
+        (
+            DotBotExecutionError("Codex error: arbitrary runtime text"),
+            "DotBotExecutionError: Codex error",
+        ),
+        (
+            DotBotExecutionError(
+                "OpenRouter returned an error instead of choices: code=429 type=rate_limit_exceeded"
+            ),
+            "DotBotExecutionError: OpenRouter returned an error instead of choices: "
+            "code=429 type=rate_limit_exceeded",
+        ),
+        (
+            DotBotExecutionError("OpenRouter did not return structured output on turn 2."),
+            "DotBotExecutionError: OpenRouter did not return structured output on turn 2.",
         ),
         (KeyError("model-controlled text"), "KeyError"),
     ],

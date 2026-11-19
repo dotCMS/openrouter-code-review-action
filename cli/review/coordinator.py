@@ -82,6 +82,10 @@ def _panel_output_schema(issue_ids: set[str]) -> dict[str, Any]:
 # A whole reply wrapped in one Markdown code fence; JSON is never extracted from prose.
 _FENCED_REPLY = re.compile(r"\A\s*```(?:json)?[ \t]*\n(.*)\n[ \t]*```\s*\Z", re.DOTALL)
 _EXCERPT_CHARS = 300
+# Built only from a validated status code and error type, so safe to log whole.
+_LOG_SAFE_FAILURE = re.compile(
+    r"OpenRouter returned an error instead of choices: code=(?:\d{3}|unknown) type=[a-z_]+"
+)
 
 
 def _carries_decision(text: str) -> bool:
@@ -110,6 +114,19 @@ def _carries_decision(text: str) -> bool:
             for item in dispositions.values()
         )
     )
+
+
+def _log_safe_failure(error: BaseException) -> str:
+    """The part of a reviewer failure that may be logged with model streaming off."""
+    text = " ".join(str(error).split())
+    if isinstance(error, ReviewContractError):
+        return text  # fixed validation messages
+    if not isinstance(error, DotBotReviewError):
+        return ""
+    if _LOG_SAFE_FAILURE.fullmatch(text):
+        return text
+    # Our own errors read "<category>: <detail>"; the detail may be provider or runtime text.
+    return text.split(":", 1)[0][:120]
 
 
 def _excerpt(text: str) -> str:
@@ -474,12 +491,7 @@ class ReviewCoordinator:
                     f"waiting for {pending}"
                 ) from exc
             if isinstance(result, BaseException):
-                # Our own errors name the cause; an HTTP error keeps its status, not its body.
-                message = (
-                    re.sub(r"(OpenRouter HTTP \d+):.*", r"\1", " ".join(str(result).split()))
-                    if isinstance(result, DotBotReviewError)
-                    else ""
-                )
+                message = _log_safe_failure(result)
                 detail = f": {self._redact(message)}" if message else ""
                 raise DotBotExecutionError(
                     f"Panel {phase} failed for {model}: {type(result).__name__}{detail}"
