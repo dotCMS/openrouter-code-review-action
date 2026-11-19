@@ -81,45 +81,33 @@ def _panel_output_schema(issue_ids: set[str]) -> dict[str, Any]:
 
 # A whole reply wrapped in one Markdown code fence; JSON is never extracted from prose.
 _FENCED_REPLY = re.compile(r"\A\s*```(?:json)?[ \t]*\n(.*)\n[ \t]*```\s*\Z", re.DOTALL)
-# Raw-text signs of a possible decision, matched even in truncated JSON: findings or
-# carried_forward that are not an explicitly empty array, any action other than reject, any
-# verdict other than approval, and any \\u escape, which could spell these out of sight.
-_DECISION_MARKERS = re.compile(
-    r'"(?:findings|carried_forward)"\s*:(?!\s*\[\s*\])'
-    r'|"action"\s*:(?!\s*"reject")'
-    r'|"retain"'
-    r'|"overall_correctness"\s*:(?!\s*"patch is correct")'
-    r"|\\u"
-)
 _EXCERPT_CHARS = 300
 
 
 def _carries_decision(text: str) -> bool:
-    """Whether a rejected reply may hold a decision that a correction could erase."""
-    # A top-level array can only be a bare list of findings, even when cut off, and even
-    # inside a code fence whose closing line was cut off too.
-    unfenced = re.sub(r"\A\s*```(?:json)?[ \t]*\n", "", text, count=1)
-    if unfenced.lstrip().startswith("[") or _DECISION_MARKERS.search(text):
-        return True
+    """Whether a rejected reply may hold a decision that a correction could erase.
+
+    Allowlist, fail closed: only a reply with no JSON structure at all, or a strictly parsed
+    panel object that is visibly decision-free, may be corrected. Anything partial, escaped,
+    duplicated or unknown counts as a possible decision.
+    """
+    if "{" not in text and "[" not in text:
+        return False
     try:
         payload = json.loads(text, object_pairs_hook=_unique_json_object)
-    except ReviewContractError:
-        return True  # duplicate keys: plain parsing would keep only the last value
-    except ValueError:
-        return False
-    if not isinstance(payload, dict):
+    except (ReviewContractError, ValueError):
         return True
-    dispositions = payload.get("dispositions")
+    if not isinstance(payload, dict) or not set(payload) <= set(PANEL_OUTPUT_SCHEMA["properties"]):
+        return True
+    dispositions = payload.get("dispositions", {})
     return (
-        bool(payload.get("findings"))
-        or bool(payload.get("carried_forward"))
-        or payload.get("overall_correctness") == "patch is incorrect"
-        or (
-            isinstance(dispositions, dict)
-            and any(
-                not isinstance(item, dict) or item.get("action") != "reject"
-                for item in dispositions.values()
-            )
+        payload.get("findings", []) != []
+        or payload.get("carried_forward", []) != []
+        or payload.get("overall_correctness", "patch is correct") != "patch is correct"
+        or not isinstance(dispositions, dict)
+        or any(
+            not isinstance(item, dict) or item.get("action") != "reject"
+            for item in dispositions.values()
         )
     )
 
@@ -445,7 +433,11 @@ class ReviewCoordinator:
                     turn.review.findings != protected.review.findings
                     or turn.dispositions != protected.dispositions
                 ):
-                    raise ReviewContractError("Correction changed findings or disposition actions")
+                    error = ReviewContractError(
+                        "Correction changed findings or disposition actions"
+                    )
+                    self._log_rejected_reply(model, phase, validations, error, output, False)
+                    raise error
 
             try:
                 output = self.clients[model].execute_structured(

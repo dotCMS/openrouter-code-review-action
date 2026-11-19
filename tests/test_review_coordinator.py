@@ -542,6 +542,8 @@ def test_real_client_repairs_one_turn_without_erasing_findings_or_votes(
         assert "not correctable: the reply may hold findings or votes" in rejected[0]
     else:
         assert "| one correction requested |" in rejected[0]
+    if correction in {"drop-finding", "change-vote"}:
+        assert "reply 2: Correction changed findings or disposition actions" in rejected[1]
     if correction == "invalid-json-twice":
         assert rejected[1].startswith(
             "[review-panel-rejected] primary investigation reply 2: Panel response is not valid "
@@ -695,6 +697,11 @@ def test_rejected_reply_log_is_redacted_bounded_and_single_line(
         '{"dispositions": {"F1": "retain"}}',
         '{"dispositions": {"F1": {"action": "keep"}}}',
         '```json\n[{"title": "a cut-off finding"',
+        # Non-JSON verdicts, findings without the envelope, and decision-free but cut-off JSON.
+        '{overall_correctness: "patch is incorrect"}',
+        '{"title": "x", "body": "y", "code_location": {}}',
+        '{"overall_correctness": "patch is correct", "findings": []',
+        '{"dispositions": {"F1": {"action": "reject"}}, "extra": 1}',
     ],
 )
 def test_rejected_reply_that_may_hold_a_decision_fails_closed(reply: str) -> None:
@@ -705,8 +712,10 @@ def test_rejected_reply_that_may_hold_a_decision_fails_closed(reply: str) -> Non
 
 def test_fence_is_only_stripped_around_the_whole_reply() -> None:
     assert PanelTurn.parse("```\n" + _turn() + "\n```", set()).review.findings == []
-    with pytest.raises(CorrectableReviewError, match="not valid JSON"):
+    # JSON is never pulled out of prose; the embedded object could hold findings, so no retry.
+    with pytest.raises(ReviewContractError, match="not valid JSON") as caught:
         PanelTurn.parse("Here you go:\n```json\n" + _turn() + "\n```", set())
+    assert not isinstance(caught.value, CorrectableReviewError)
 
 
 @pytest.mark.parametrize(
@@ -739,7 +748,13 @@ def test_failure_detail_names_own_errors_without_provider_bodies(
 
 @pytest.mark.parametrize(
     "reply",
-    ["", "not json", '{"overall_correctness": "patch is correct", "findings": []', "{}"],
+    [
+        "",
+        "not json",
+        "{}",
+        '{"overall_correctness": "patch is correct", "findings": [], "message": ""}',
+        '{"dispositions": {"F1": {"action": "reject", "reason": "", "evidence": ""}}}',
+    ],
 )
 def test_rejected_reply_without_a_possible_decision_is_correctable(reply: str) -> None:
     with pytest.raises(CorrectableReviewError):
