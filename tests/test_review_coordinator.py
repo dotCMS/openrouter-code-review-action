@@ -800,6 +800,8 @@ def test_correction_cannot_flip_an_explicit_reject_vote(tmp_path: Path, keep_rej
         # First reply: a shape error (empty security summary) next to an explicit reject.
         first = json.loads(_turn(votes={"P1": False}))
         first["security_summary"] = ""
+        # An ID outside the ledger is not locked, so it cannot fail a valid correction.
+        first["dispositions"]["F99"] = {"action": "reject", "reason": "r", "evidence": "e"}
         validator = kwargs["output_validator"]
         with pytest.raises(CorrectableReviewError):
             validator(json.dumps(first))

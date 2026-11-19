@@ -466,7 +466,7 @@ class ReviewCoordinator:
                         protected = exc.turn
                     correctable = validations == 1 and isinstance(exc, CorrectableReviewError)
                     if correctable:
-                        locked_rejects = _explicit_rejects(output)
+                        locked_rejects = _explicit_rejects(output) & issue_ids
                     self._log_rejected_reply(model, phase, validations, exc, output, correctable)
                     if correctable and self.config.stream_output:
                         print(

@@ -723,6 +723,7 @@ def test_malformed_finish_reason_is_reported_not_raised(
     "message",
     [
         {"role": "assistant", "content": None, "refusal": "I can't help with that."},
+        {"role": "assistant", "content": "{}", "refusal": "I can't help with that."},
         {"role": "assistant", "content": [{"type": "text", "text": "{}"}]},
     ],
 )
