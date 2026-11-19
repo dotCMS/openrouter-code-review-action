@@ -279,12 +279,16 @@ class OpenRouterClient:
         )
         messages.append({"role": "user", "content": schema_prompt})
         for correction in range(2):
-            content = self._schema_turn(
-                messages,
-                output_schema=output_schema,
-                model_name=model_name,
-                reasoning_effort=reasoning_effort,
-            )
+            try:
+                content = self._schema_turn(
+                    messages,
+                    output_schema=output_schema,
+                    model_name=model_name,
+                    reasoning_effort=reasoning_effort,
+                )
+            except DotBotExecutionError:
+                self._save_thread(thread_id, messages, model_name=model_name)  # keep for diagnosis
+                raise
             if content.strip():
                 messages.append({"role": "assistant", "content": content})
             if output_validator is None:
@@ -487,6 +491,8 @@ class OpenRouterClient:
             )
         if finish not in (None, "stop"):
             # A cut-off, filtered or failed turn is incomplete, so never validate or correct it.
+            if text:
+                messages.append({"role": "assistant", "content": text})
             raise DotBotExecutionError(
                 f"OpenRouter structured turn ended with finish_reason={finish} ({len(text)} chars)"
             )

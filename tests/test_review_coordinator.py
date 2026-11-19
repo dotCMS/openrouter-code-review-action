@@ -641,7 +641,7 @@ def test_cost_summary_marks_reviewer_still_running_after_abort_unavailable(
 def test_rejected_reply_log_is_redacted_bounded_and_single_line(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    reply = "SECRET-MODEL " + "x" * 2000 + "\n::error::forged"
+    reply = "SECRET-MODEL ##[set-output name=x;]y " + "x" * 2000 + "\n::error::forged"
 
     def handler(prompt: str, kwargs: dict[str, Any]) -> str:
         if kwargs["model_name"] == "secondary":
@@ -661,12 +661,13 @@ def test_rejected_reply_log_is_redacted_bounded_and_single_line(
         err = capsys.readouterr().err
         assert "SECRET-MODEL" not in err
         assert not any(line.startswith("::") for line in err.splitlines())
+        assert "##[" not in err
         [line] = [line for line in err.splitlines() if "[review-panel-rejected]" in line]
         assert f"| not correctable: the reply may hold findings or votes | {len(reply)} chars" in (
             line
         )
         if stream_output:
-            assert '| excerpt "[REDACTED] xxx' in line
+            assert '| excerpt "[REDACTED] #\\u0023[set-output name=x;]y xxx' in line
             assert "\\n::error::forged" in line
             assert len(line) < 1000
         else:
@@ -819,3 +820,14 @@ def test_correction_cannot_flip_an_explicit_reject_vote(tmp_path: Path, keep_rej
             DotBotExecutionError, match="Correction changed findings or disposition"
         ):
             _run(panel, tmp_path, [prior])
+
+
+def test_streamed_transcript_neutralises_legacy_workflow_commands(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    panel, _ = _panel(_config(tmp_path), lambda prompt, kwargs: _turn(message="Hi ##[error]x"))
+    _run(panel, tmp_path)
+    out = capsys.readouterr().out
+    assert "##[" not in out
+    entry = json.loads(out.splitlines()[0].removeprefix("[review-panel] "))
+    assert entry["message"] == "Hi ##[error]x"  # the JSON escape decodes back unchanged

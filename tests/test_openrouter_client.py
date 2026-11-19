@@ -756,3 +756,15 @@ def test_abnormal_turn_is_an_error_not_a_retry(tmp_path: Path, finish: str, cont
         DotBotExecutionError, match=rf"finish_reason={expected} \({len(content)} chars\)"
     ):
         client.execute_structured("review", output_schema={"type": "object"})
+
+
+def test_abnormal_turn_keeps_the_partial_reply_in_the_saved_thread(tmp_path: Path) -> None:
+    truncated = _text_response('{"overall_corr')
+    truncated["choices"][0]["finish_reason"] = "length"
+    client = _client(tmp_path, _ScriptedTransport([_text_response("thinking"), truncated]))
+
+    with pytest.raises(DotBotExecutionError, match="finish_reason=length"):
+        client.execute_structured("review", output_schema={"type": "object"})
+
+    [saved] = list((tmp_path / "threads").glob("*.json"))
+    assert '{\\"overall_corr' in saved.read_text()

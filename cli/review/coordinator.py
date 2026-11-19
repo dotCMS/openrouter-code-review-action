@@ -128,6 +128,14 @@ def _carries_decision(text: str) -> bool:
     )
 
 
+def _no_workflow_commands(line: str) -> str:
+    """Neutralise legacy ##[ runner commands, which GitHub Actions honours mid-line.
+
+    The replacement is a JSON escape, so a JSON payload on the line still decodes the same.
+    """
+    return line.replace("##[", "#\\u0023[")
+
+
 def _reject_constant(name: str) -> None:
     raise ValueError(f"{name} is not valid JSON")  # Python accepts NaN and Infinity; JSON does not
 
@@ -357,7 +365,9 @@ class ReviewCoordinator:
                 self.transcript.append(entry)
                 if self.config.stream_output:
                     print(
-                        self._redact(f"[review-panel] {json.dumps(entry, ensure_ascii=True)}"),
+                        _no_workflow_commands(
+                            self._redact(f"[review-panel] {json.dumps(entry, ensure_ascii=True)}")
+                        ),
                         flush=True,
                     )
             write_text_atomic(
@@ -563,7 +573,7 @@ class ReviewCoordinator:
         if self.config.stream_output:
             # Redact before truncating; JSON escaping keeps model text on this one line.
             line += " | excerpt " + json.dumps(_excerpt(self._redact(output)), ensure_ascii=True)
-        print(self._redact(line), file=sys.stderr, flush=True)
+        print(_no_workflow_commands(self._redact(line)), file=sys.stderr, flush=True)
 
     def _redact(self, text: str) -> str:
         for secret in sorted(
