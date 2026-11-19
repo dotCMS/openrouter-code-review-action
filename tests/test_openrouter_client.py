@@ -807,3 +807,21 @@ def test_unhashable_error_type_is_reported_as_unknown(tmp_path: Path, error_type
 
     with pytest.raises(DotBotExecutionError, match="code=429 type=unknown$"):
         client.execute_text("inspect")
+
+
+def test_non_text_reply_is_kept_in_the_saved_thread(tmp_path: Path) -> None:
+    reply = {
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": [{"type": "text", "text": "payload"}]},
+                "finish_reason": "stop",
+            }
+        ]
+    }
+    client = _client(tmp_path, _ScriptedTransport([_text_response("thinking"), reply]))
+
+    with pytest.raises(DotBotExecutionError, match="non-text structured output"):
+        client.execute_structured("review", output_schema={"type": "object"})
+
+    [saved] = list((tmp_path / "threads").glob("*.json"))
+    assert "payload" in saved.read_text()

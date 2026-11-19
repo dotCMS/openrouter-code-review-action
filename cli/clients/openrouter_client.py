@@ -493,8 +493,18 @@ class OpenRouterClient:
                 f"OpenRouter structured turn ended with finish_reason={finish} ({len(text)} chars)"
             )
         if problem is not None:
-            if text:
-                messages.append({"role": "assistant", "content": text})  # saved for diagnosis
+            # Keep what the model sent in the saved thread for diagnosis. Anything beyond plain
+            # text is stored as a JSON string, so the thread stays a valid conversation.
+            raw = {
+                key: message[key]
+                for key in ("content", "refusal", "tool_calls")
+                if message.get(key) is not None
+            }
+            kept = text if set(raw) <= {"content"} and isinstance(content, str) else ""
+            if not kept and raw:
+                kept = json.dumps(raw, ensure_ascii=True, default=str)
+            if kept:
+                messages.append({"role": "assistant", "content": kept})
             raise DotBotExecutionError(problem)
         return text
 
