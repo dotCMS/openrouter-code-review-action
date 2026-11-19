@@ -80,7 +80,7 @@ def _panel_output_schema(issue_ids: set[str]) -> dict[str, Any]:
 
 
 # A whole reply wrapped in one Markdown code fence; JSON is never extracted from prose.
-_FENCED_REPLY = re.compile(r"\A\s*```(?:json)?[ \t]*\n(.*)\n[ \t]*```\s*\Z", re.DOTALL)
+_FENCED_REPLY = re.compile(r"\A\s*```(?:json)?[ \t]*\r?\n(.*?)\r?\n[ \t]*```\s*\Z", re.DOTALL)
 _EXCERPT_CHARS = 300
 # Built only from a validated status code and error type, so safe to log whole.
 _LOG_SAFE_FAILURE = re.compile(

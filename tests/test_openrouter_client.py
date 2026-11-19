@@ -679,9 +679,8 @@ def test_truncated_structured_turn_warns_with_finish_reason(
     truncated["choices"][0]["finish_reason"] = "length"
     client = _client(tmp_path, _ScriptedTransport([_text_response("thinking"), truncated]))
 
-    assert client.execute_structured("review", output_schema={"type": "object"}) == (
-        '{"overall_corr'
-    )
+    with pytest.raises(DotBotExecutionError, match=r"finish_reason=length \(14 chars\)"):
+        client.execute_structured("review", output_schema={"type": "object"})
 
     err = capsys.readouterr().err
     assert "ended with finish_reason=length, 14 chars" in err
@@ -694,7 +693,8 @@ def test_provider_fields_cannot_inject_workflow_commands(
     forged = _text_response("{}")
     forged["choices"][0]["finish_reason"] = "error\n::error::forged"
     client = _client(tmp_path, _ScriptedTransport([_text_response("thinking"), forged]))
-    client.execute_structured("review", output_schema={"type": "object"})
+    with pytest.raises(DotBotExecutionError, match="finish_reason=unrecognized"):
+        client.execute_structured("review", output_schema={"type": "object"})
     err = capsys.readouterr().err
     assert "finish_reason=unrecognized, 2 chars" in err
     assert "::error::forged" not in err
@@ -714,7 +714,8 @@ def test_malformed_finish_reason_is_reported_not_raised(
     reply["choices"][0]["finish_reason"] = finish
     client = _client(tmp_path, _ScriptedTransport([_text_response("thinking"), reply]))
 
-    assert client.execute_structured("review", output_schema={"type": "object"}) == "{}"
+    with pytest.raises(DotBotExecutionError, match="finish_reason=unrecognized"):
+        client.execute_structured("review", output_schema={"type": "object"})
     assert "finish_reason=unrecognized" in capsys.readouterr().err
 
 
@@ -736,13 +737,14 @@ def test_uninspectable_structured_reply_is_an_error_not_a_retry(
 
 
 @pytest.mark.parametrize("finish", ["length", "content_filter", "error", "something_new"])
-def test_empty_reply_from_an_abnormal_turn_is_an_error_not_a_retry(
-    tmp_path: Path, finish: str
-) -> None:
-    reply = _text_response("")
+@pytest.mark.parametrize("content", ["", '{"overall_correctness": "patch is correct"}'])
+def test_abnormal_turn_is_an_error_not_a_retry(tmp_path: Path, finish: str, content: str) -> None:
+    reply = _text_response(content)
     reply["choices"][0]["finish_reason"] = finish
     client = _client(tmp_path, _ScriptedTransport([_text_response("thinking"), reply]))
     expected = finish if finish != "something_new" else "unrecognized"
 
-    with pytest.raises(DotBotExecutionError, match=f"finish_reason={expected} and no output"):
+    with pytest.raises(
+        DotBotExecutionError, match=rf"finish_reason={expected} \({len(content)} chars\)"
+    ):
         client.execute_structured("review", output_schema={"type": "object"})
