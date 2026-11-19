@@ -511,7 +511,9 @@ def test_real_client_repairs_one_turn_without_erasing_findings_or_votes(
         )
 
     panel = ReviewCoordinator(config, factory)
-    if correction in {"valid", "invalid-json", "empty", "fenced"}:
+    # Prose can state a verdict, so a non-JSON reply fails closed like a reply with findings.
+    uncorrectable = {"masked-conflict", "truncated-finding", "invalid-json", "invalid-json-twice"}
+    if correction in {"valid", "empty", "fenced"}:
         result = _run(panel, tmp_path, [prior])
         assert result.overall_correctness == "patch is incorrect"
         assert len(result.findings) == 1
@@ -524,11 +526,9 @@ def test_real_client_repairs_one_turn_without_erasing_findings_or_votes(
         with pytest.raises(DotBotExecutionError, match="investigation failed for primary"):
             _run(panel, tmp_path, [prior])
         assert not panel.transcript
-        assert initial_calls["primary"] == (
-            1 if correction in {"masked-conflict", "truncated-finding"} else 2
-        )
+        assert initial_calls["primary"] == (1 if correction in uncorrectable else 2)
     captured = capsys.readouterr()
-    uncorrected = {"masked-conflict", "truncated-finding", "fenced"}
+    uncorrected = uncorrectable | {"fenced"}
     assert captured.out.count("[review-panel-correction]") == (
         0 if correction in uncorrected else 1
     )
@@ -537,18 +537,15 @@ def test_real_client_repairs_one_turn_without_erasing_findings_or_votes(
     ]
     if correction == "fenced":
         assert rejected == []
-    elif correction in {"masked-conflict", "truncated-finding"}:
+    elif correction in uncorrectable:
         assert len(rejected) == 1
         assert "not correctable: the reply may hold findings or votes" in rejected[0]
     else:
         assert "| one correction requested |" in rejected[0]
     if correction in {"drop-finding", "change-vote"}:
         assert "reply 2: Correction changed findings or disposition actions" in rejected[1]
-    if correction == "invalid-json-twice":
-        assert rejected[1].startswith(
-            "[review-panel-rejected] primary investigation reply 2: Panel response is not valid "
-            "JSON: Expecting value at line 1 column 1 | correction rejected too | 14 chars"
-        )
+    if correction == "still-invalid":
+        assert "| correction rejected too |" in rejected[1]
     if correction == "empty":
         assert "Panel response is empty" in rejected[0]
         assert "ended with finish_reason=stop, 0 chars" in captured.err
@@ -657,7 +654,7 @@ def test_rejected_reply_log_is_redacted_bounded_and_single_line(
         panel, _ = _panel(config, handler)
         with pytest.raises(
             DotBotExecutionError,
-            match="investigation failed for secondary: CorrectableReviewError: "
+            match="investigation failed for secondary: ReviewContractError: "
             "Panel response is not valid JSON: Expecting value",
         ):
             _run(panel, tmp_path)
@@ -665,7 +662,9 @@ def test_rejected_reply_log_is_redacted_bounded_and_single_line(
         assert "SECRET-MODEL" not in err
         assert not any(line.startswith("::") for line in err.splitlines())
         [line] = [line for line in err.splitlines() if "[review-panel-rejected]" in line]
-        assert f"| one correction requested | {len(reply)} chars" in line
+        assert f"| not correctable: the reply may hold findings or votes | {len(reply)} chars" in (
+            line
+        )
         if stream_output:
             assert '| excerpt "[REDACTED] xxx' in line
             assert "\\n::error::forged" in line
@@ -677,6 +676,8 @@ def test_rejected_reply_log_is_redacted_bounded_and_single_line(
 @pytest.mark.parametrize(
     "reply",
     [
+        "The patch is incorrect: the caller is unauthorized.",
+        "not json",
         '{"overall_correctness": "patch is incorrect", "findings": []',
         '{"dispositions": {"F1": {"action": "retain"}}}',
         '[{"title": "a finding without its envelope"}]',
@@ -765,7 +766,7 @@ def test_failure_detail_names_own_errors_without_provider_bodies(
     "reply",
     [
         "",
-        "not json",
+        "   \n",
         "{}",
         '{"overall_correctness": "patch is correct", "findings": [], "message": ""}',
         '{"dispositions": {"F1": {"action": "reject", "reason": "", "evidence": ""}}}',

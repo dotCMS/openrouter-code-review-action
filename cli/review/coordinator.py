@@ -91,11 +91,11 @@ _LOG_SAFE_FAILURE = re.compile(
 def _carries_decision(text: str) -> bool:
     """Whether a rejected reply may hold a decision that a correction could erase.
 
-    Allowlist, fail closed: only a reply with no JSON structure at all, or a strictly parsed
-    panel object that is visibly decision-free, may be corrected. Anything partial, escaped,
-    duplicated or unknown counts as a possible decision.
+    Allowlist, fail closed: only an empty reply, or a strictly parsed panel object that is
+    visibly decision-free, may be corrected. Prose, partial, escaped, duplicated or unknown
+    replies count as a possible decision (prose can state a verdict too).
     """
-    if "{" not in text and "[" not in text:
+    if not text.strip():
         return False
     try:
         payload = json.loads(text, object_pairs_hook=_unique_json_object)
