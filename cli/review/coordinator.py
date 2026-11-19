@@ -98,7 +98,9 @@ def _carries_decision(text: str) -> bool:
     if not text.strip():
         return False
     try:
-        payload = json.loads(text, object_pairs_hook=_unique_json_object)
+        payload = json.loads(
+            text, object_pairs_hook=_unique_json_object, parse_constant=_reject_constant
+        )
     except (ReviewContractError, ValueError):
         return True
     if not isinstance(payload, dict) or not set(payload) <= set(PANEL_OUTPUT_SCHEMA["properties"]):
@@ -124,6 +126,10 @@ def _carries_decision(text: str) -> bool:
             for item in dispositions.values()
         )
     )
+
+
+def _reject_constant(name: str) -> None:
+    raise ValueError(f"{name} is not valid JSON")  # Python accepts NaN and Infinity; JSON does not
 
 
 def _explicit_rejects(text: str) -> set[str]:

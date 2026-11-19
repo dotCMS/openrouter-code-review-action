@@ -725,6 +725,11 @@ def test_malformed_finish_reason_is_reported_not_raised(
         {"role": "assistant", "content": None, "refusal": "I can't help with that."},
         {"role": "assistant", "content": "{}", "refusal": "I can't help with that."},
         {"role": "assistant", "content": [{"type": "text", "text": "{}"}]},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "c", "type": "function", "function": {"name": "x"}}],
+        },
     ],
 )
 def test_uninspectable_structured_reply_is_an_error_not_a_retry(
@@ -733,7 +738,9 @@ def test_uninspectable_structured_reply_is_an_error_not_a_retry(
     reply = {"choices": [{"message": message, "finish_reason": "stop"}]}
     client = _client(tmp_path, _ScriptedTransport([_text_response("thinking"), reply]))
 
-    with pytest.raises(DotBotExecutionError, match="refusal or non-text structured output"):
+    with pytest.raises(
+        DotBotExecutionError, match="refusal, tool calls or non-text structured output"
+    ):
         client.execute_structured("review", output_schema={"type": "object"})
 
 

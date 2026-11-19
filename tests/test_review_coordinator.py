@@ -707,6 +707,8 @@ def test_rejected_reply_log_is_redacted_bounded_and_single_line(
         '{"dispositions": {"F1": {"action": "reject", "findings": [{"title": "x"}]}}}',
         '{"dispositions": {"F1": {"action": "reject", "reason": ["x"]}}}',
         '{"message": {"title": "x", "body": "y"}, "findings": []}',
+        # Not JSON, although Python's parser accepts it.
+        '{"overall_confidence_score": NaN}',
     ],
 )
 def test_rejected_reply_that_may_hold_a_decision_fails_closed(reply: str) -> None:
