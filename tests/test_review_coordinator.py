@@ -725,6 +725,11 @@ def test_fence_is_only_stripped_around_the_whole_reply() -> None:
     for empty in ("```json\n```", "```\r\n```\r\n"):
         with pytest.raises(CorrectableReviewError, match="Panel response is empty"):
             PanelTurn.parse(empty, set())
+    huge_int = _turn().replace(
+        '"overall_confidence_score": 0.9', '"overall_confidence_score": 1' + "0" * 400
+    )
+    with pytest.raises(ReviewContractError, match="JSON number is outside the supported range"):
+        PanelTurn.parse("```json\n" + huge_int + "\n```", set())
     overflow = _turn().replace(
         '"overall_confidence_score": 0.9', '"overall_confidence_score": 1e309'
     )
@@ -870,3 +875,23 @@ def test_overflowing_number_is_logged_without_its_token(
     err = capsys.readouterr().err
     assert "JSON number is outside the supported range" in err
     assert "0" * 50 not in err
+
+
+def test_rejected_reply_excerpt_redacts_json_escaped_credentials(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # JSON escapes that spell SECRET-MODEL and SECRET-GITHUB without the literal text.
+    escaped = r"{SECRET-MODEL and SECRET-GITHUB"
+
+    def handler(prompt: str, kwargs: dict[str, Any]) -> str:
+        if kwargs["model_name"] == "secondary":
+            kwargs["output_validator"](escaped)
+        return _turn()
+
+    panel, _ = _panel(_config(tmp_path), handler)
+    with pytest.raises(DotBotExecutionError):
+        _run(panel, tmp_path)
+    err = capsys.readouterr().err
+    assert "u0053ECRET" not in err
+    assert "u002dGITHUB" not in err
+    assert err.count("[REDACTED]") >= 2

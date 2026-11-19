@@ -105,6 +105,7 @@ def _carries_decision(text: str) -> bool:
             object_pairs_hook=_unique_json_object,
             parse_constant=_reject_constant,
             parse_float=_finite_float,
+            parse_int=_finite_int,
         )
     except (ReviewContractError, ValueError):
         return True
@@ -149,6 +150,15 @@ def _finite_float(literal: str) -> float:
     return value
 
 
+def _finite_int(literal: str) -> int:
+    try:
+        value = int(literal)
+        float(value)  # ints are later read as floats (e.g. the confidence score)
+    except (OverflowError, ValueError):
+        raise ValueError("JSON number is outside the supported range") from None
+    return value
+
+
 def _reject_constant(name: str) -> None:
     raise ValueError(f"{name} is not valid JSON")  # Python accepts NaN and Infinity; JSON does not
 
@@ -181,6 +191,15 @@ def _log_safe_failure(error: BaseException) -> str:
         return text
     # Our own errors read "<category>: <detail>"; the detail may be provider or runtime text.
     return text.split(":", 1)[0][:120]
+
+
+# \uXXXX and \/ can spell any credential character; decode them so redaction sees the text.
+_JSON_TEXT_ESCAPE = re.compile(r"\\(u[0-9a-fA-F]{4}|/)")
+
+
+def _unescape_json_text(match: re.Match[str]) -> str:
+    escape = match.group(1)
+    return "/" if escape == "/" else chr(int(escape[1:], 16))
 
 
 def _excerpt(text: str) -> str:
@@ -230,6 +249,7 @@ class PanelTurn:
                 object_pairs_hook=_unique_json_object,
                 parse_constant=_reject_constant,
                 parse_float=_finite_float,
+                parse_int=_finite_int,
             )
         except json.JSONDecodeError as exc:
             raise ReviewContractError(
@@ -592,7 +612,8 @@ class ReviewCoordinator:
         )
         if self.config.stream_output:
             # Redact before truncating; JSON escaping keeps model text on this one line.
-            line += " | excerpt " + json.dumps(_excerpt(self._redact(output)), ensure_ascii=True)
+            visible = _JSON_TEXT_ESCAPE.sub(_unescape_json_text, output)
+            line += " | excerpt " + json.dumps(_excerpt(self._redact(visible)), ensure_ascii=True)
         print(_no_workflow_commands(self._redact(line)), file=sys.stderr, flush=True)
 
     def _redact(self, text: str) -> str:
