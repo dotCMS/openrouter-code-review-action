@@ -665,11 +665,11 @@ def test_in_body_error_without_choices_is_described(
 
     with pytest.raises(DotBotExecutionError) as caught:
         client.execute_text("inspect")
-    # The provider's free text stays in the log; the exception may be posted to a PR (act mode).
+    # The exception may be posted to a PR (act mode), so the provider's free text never enters it.
     assert str(caught.value) == (
         "OpenRouter returned an error instead of choices: code=502 type=provider_error"
     )
-    assert "OpenRouter error message: Provider returned error" in capsys.readouterr().err
+    assert "Provider" not in capsys.readouterr().err
 
 
 def test_truncated_structured_turn_warns_with_finish_reason(

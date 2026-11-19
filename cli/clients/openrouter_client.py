@@ -644,16 +644,11 @@ class OpenRouterClient:
 _KNOWN_FINISH_REASONS = {None, "stop", "length", "content_filter", "error", "tool_calls"}
 
 
-def _one_line(value: object, limit: int) -> str:
-    """Bound provider text to one line so it cannot inject a workflow command."""
-    return " ".join(str(value).split())[:limit]
-
-
 def _missing_choices_error(response: dict[str, Any]) -> DotBotExecutionError:
     """Describe a response without choices, using OpenRouter's in-body error when present.
 
-    The exception text can reach a public PR reply (act mode), so it carries only a validated
-    status code and error type; the provider's free-form message goes to the log alone.
+    The exception text can reach a public PR reply (act mode) and CI logs, so it carries only
+    a validated status code and error type, never the provider's free-form message.
     """
     error = response.get("error")
     if not isinstance(error, dict):
@@ -661,9 +656,6 @@ def _missing_choices_error(response: dict[str, Any]) -> DotBotExecutionError:
     code = error.get("code")
     metadata = error.get("metadata")
     error_type = metadata.get("error_type") if isinstance(metadata, dict) else None
-    detail = _one_line(error.get("message") or "", 300)
-    if detail:
-        print(f"OpenRouter error message: {detail}", file=sys.stderr, flush=True)
     return DotBotExecutionError(
         "OpenRouter returned an error instead of choices: "
         f"code={code if type(code) is int and 100 <= code <= 599 else 'unknown'} "

@@ -16,7 +16,12 @@ from typing import Any
 
 from ..clients.model_client import ModelClientProtocol
 from ..core.config import ReviewConfig
-from ..core.exceptions import CorrectableReviewError, DotBotExecutionError, ReviewContractError
+from ..core.exceptions import (
+    CorrectableReviewError,
+    DotBotExecutionError,
+    DotBotReviewError,
+    ReviewContractError,
+)
 from ..core.filesystem import write_text_atomic
 from ..core.model_config import validate_panel_options
 from ..core.models import (
@@ -82,6 +87,7 @@ _FENCED_REPLY = re.compile(r"\A\s*```(?:json)?[ \t]*\n(.*)\n[ \t]*```\s*\Z", re.
 _DECISION_MARKERS = re.compile(
     r'"(?:findings|carried_forward)"\s*:(?!\s*\[\s*\])'
     r'|"action"\s*:(?!\s*"reject")'
+    r'|"retain"'
     r'|"overall_correctness"\s*:(?!\s*"patch is correct")'
     r"|\\u"
 )
@@ -90,8 +96,10 @@ _EXCERPT_CHARS = 300
 
 def _carries_decision(text: str) -> bool:
     """Whether a rejected reply may hold a decision that a correction could erase."""
-    # A top-level array can only be a bare list of findings, even when cut off.
-    if text.lstrip().startswith("[") or _DECISION_MARKERS.search(text):
+    # A top-level array can only be a bare list of findings, even when cut off, and even
+    # inside a code fence whose closing line was cut off too.
+    unfenced = re.sub(r"\A\s*```(?:json)?[ \t]*\n", "", text, count=1)
+    if unfenced.lstrip().startswith("[") or _DECISION_MARKERS.search(text):
         return True
     try:
         payload = json.loads(text, object_pairs_hook=_unique_json_object)
@@ -109,7 +117,7 @@ def _carries_decision(text: str) -> bool:
         or (
             isinstance(dispositions, dict)
             and any(
-                isinstance(item, dict) and item.get("action") == "retain"
+                not isinstance(item, dict) or item.get("action") != "reject"
                 for item in dispositions.values()
             )
         )
@@ -474,7 +482,12 @@ class ReviewCoordinator:
                     f"waiting for {pending}"
                 ) from exc
             if isinstance(result, BaseException):
-                message = " ".join(str(result).split())
+                # Our own errors name the cause; an HTTP error keeps its status, not its body.
+                message = (
+                    re.sub(r"(OpenRouter HTTP \d+):.*", r"\1", " ".join(str(result).split()))
+                    if isinstance(result, DotBotReviewError)
+                    else ""
+                )
                 detail = f": {self._redact(message)}" if message else ""
                 raise DotBotExecutionError(
                     f"Panel {phase} failed for {model}: {type(result).__name__}{detail}"

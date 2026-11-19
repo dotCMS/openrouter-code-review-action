@@ -691,6 +691,10 @@ def test_rejected_reply_log_is_redacted_bounded_and_single_line(
         '{"carried_forward": [',
         '{"findings": {"title": "x"',
         '[{"title": "a cut-off finding"',
+        # A malformed vote and a bare array inside a fence whose closing line was cut off.
+        '{"dispositions": {"F1": "retain"}}',
+        '{"dispositions": {"F1": {"action": "keep"}}}',
+        '```json\n[{"title": "a cut-off finding"',
     ],
 )
 def test_rejected_reply_that_may_hold_a_decision_fails_closed(reply: str) -> None:
@@ -705,18 +709,32 @@ def test_fence_is_only_stripped_around_the_whole_reply() -> None:
         PanelTurn.parse("Here you go:\n```json\n" + _turn() + "\n```", set())
 
 
-def test_failure_detail_names_non_contract_errors_and_timeouts(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (
+            DotBotExecutionError('OpenRouter HTTP 502: {"body": "upstream SECRET-MODEL"}'),
+            "DotBotExecutionError: OpenRouter HTTP 502",
+        ),
+        (
+            DotBotExecutionError("OpenRouter request failed: timed out\nSECRET-MODEL"),
+            "DotBotExecutionError: OpenRouter request failed: timed out [REDACTED]",
+        ),
+        (KeyError("model-controlled text"), "KeyError"),
+    ],
+)
+def test_failure_detail_names_own_errors_without_provider_bodies(
+    tmp_path: Path, error: BaseException, expected: str
+) -> None:
     def handler(prompt: str, kwargs: dict[str, Any]) -> str:
         if kwargs["model_name"] == "secondary":
-            raise DotBotExecutionError("OpenRouter HTTP 502: upstream\nSECRET-MODEL")
+            raise error
         return _turn()
 
     panel, _ = _panel(_config(tmp_path), handler)
-    with pytest.raises(
-        DotBotExecutionError,
-        match=r"failed for secondary: DotBotExecutionError: OpenRouter HTTP 502: upstream \[REDACTED\]$",
-    ):
+    with pytest.raises(DotBotExecutionError) as caught:
         _run(panel, tmp_path)
+    assert str(caught.value) == f"Panel investigation failed for secondary: {expected}"
 
 
 @pytest.mark.parametrize(
