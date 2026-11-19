@@ -36,6 +36,7 @@ Codex ``CODEX_HOME`` thread resume did.
 from __future__ import annotations
 
 import json
+import math
 import sys
 import time
 import urllib.error
@@ -181,8 +182,13 @@ class OpenRouterClient:
                 self._usage_totals[key] = self._usage_totals.get(key, 0) + value
         cost = usage.get("cost")
         if isinstance(cost, (int, float)) and not isinstance(cost, bool):
-            self._cost_usd += cost
-            self._costed_requests += 1
+            try:
+                total = self._cost_usd + cost
+            except OverflowError:  # an absurd int is unknown, not a crash
+                return
+            if math.isfinite(total):
+                self._cost_usd = total
+                self._costed_requests += 1
 
     def _log_request(
         self, result: StreamingResult, *, model_name: str | None, elapsed: float
@@ -196,7 +202,7 @@ class OpenRouterClient:
         )
 
     def _log_usage_summary(self, *, model_name: str | None) -> None:
-        if not self._usage_totals:
+        if not self._usage_totals and self._costed_requests == self._window_start[1]:
             return
         model = self._resolved_model(model_name, online_suffix=False)
         cost = self._window_cost_usd()
@@ -505,9 +511,9 @@ class OpenRouterClient:
             stream_to_logs=True,
             debug=self._debug,
             on_reasoning_delta=_on_reasoning,
+            on_usage=self._accumulate_usage,
         )
         result = printer.consume_bytes(chunks)
-        self._accumulate_usage(result.usage)
         if reasoning_chars:
             self._debug(
                 1,

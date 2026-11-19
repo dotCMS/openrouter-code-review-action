@@ -505,7 +505,7 @@ def test_cost_accumulates_across_passes_and_logs_per_pass(
     )
 
 
-@pytest.mark.parametrize("cost", [None, "0.1", True])
+@pytest.mark.parametrize("cost", [None, "0.1", True, float("inf"), float("nan"), 10**400])
 def test_missing_or_non_numeric_cost_is_unknown_not_zero(
     tmp_path: Path, capsys: pytest.CaptureFixture[str], cost: Any
 ) -> None:
@@ -554,6 +554,33 @@ def test_priced_response_that_fails_validation_keeps_its_cost(tmp_path: Path) ->
         client.execute_text("boom")
 
     assert client.billed_cost_usd == pytest.approx(0.2)
+
+
+def test_cost_only_usage_still_logs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    response = _text_response("done")
+    response["usage"] = {"cost": 0.5}
+    client = _client(tmp_path, _ScriptedTransport([response]), debug_level=1)
+
+    client.execute_text("inspect")
+
+    assert "total_tokens=0 cost_usd=0.500000" in capsys.readouterr().err
+
+
+def test_stream_broken_after_usage_frame_keeps_cost(tmp_path: Path) -> None:
+    def _stream_transport(payload: dict[str, Any]) -> Any:
+        usage = {"choices": [], "usage": {"prompt_tokens": 3, "cost": 0.07}}
+        yield f"data: {json.dumps(usage)}\n\n".encode()
+        raise DotBotExecutionError("OpenRouter request failed: connection reset")
+
+    client = OpenRouterClient(
+        _config(tmp_path, stream_output=True),
+        stream_transport=_stream_transport,
+        thread_store=OpenRouterThreadStore(tmp_path / "threads"),
+    )
+
+    with pytest.raises(DotBotExecutionError, match="connection reset"):
+        client.execute_text("inspect")
+    assert client.billed_cost_usd == pytest.approx(0.07)
 
 
 def test_streamed_final_usage_chunk_reports_cost(tmp_path: Path) -> None:

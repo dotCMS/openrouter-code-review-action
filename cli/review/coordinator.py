@@ -282,8 +282,10 @@ class ReviewCoordinator:
         total: float | None = 0.0
         parts = []
         for model, client in self.clients.items():
+            # Read in-flight first so a pass count is never newer than the cost it is paired with.
+            in_flight = model in self._in_flight
             passes = getattr(client, "billed_passes", 0)
-            cost = None if model in self._in_flight else getattr(client, "billed_cost_usd", None)
+            cost = None if in_flight else getattr(client, "billed_cost_usd", None)
             total = None if cost is None or total is None else total + cost
             shown = "cost unavailable" if cost is None else f"${cost:,.2f}"
             parts.append(f"{model} {shown} over {passes} pass{'' if passes == 1 else 'es'}")
