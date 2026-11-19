@@ -292,6 +292,9 @@ def test_output_correction_does_not_reset_the_model_timeout(
             output_validator=reject,
         )
     assert len(transport.payloads) == 2
+    # The rejected reply is saved for diagnosis even though no correction was sent.
+    [saved] = list((tmp_path / "threads").glob("*.json"))
+    assert "bad JSON" in saved.read_text()
 
 
 def test_execute_structured_empty_output_raises(tmp_path: Path) -> None:
@@ -649,3 +652,179 @@ def test_schema_turn_logs_elapsed_and_accumulates_usage(
     stderr = capsys.readouterr().err
     assert "(schema turn) elapsed=" in stderr
     assert "prompt_tokens=10" in stderr
+
+
+def test_in_body_error_without_choices_is_described(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    error = {
+        "error": {
+            "code": 502,
+            "message": "Provider\nreturned error",
+            "metadata": {"error_type": "provider_unavailable"},
+        }
+    }
+    client = _client(tmp_path, _ScriptedTransport([error]))
+
+    with pytest.raises(DotBotExecutionError) as caught:
+        client.execute_text("inspect")
+    # The exception may be posted to a PR (act mode), so the provider's free text never enters it.
+    assert str(caught.value) == (
+        "OpenRouter returned an error instead of choices: code=502 type=provider_unavailable"
+    )
+    assert "Provider" not in capsys.readouterr().err
+
+
+def test_truncated_structured_turn_warns_with_finish_reason(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    truncated = _text_response('{"overall_corr')
+    truncated["choices"][0]["finish_reason"] = "length"
+    client = _client(tmp_path, _ScriptedTransport([_text_response("thinking"), truncated]))
+
+    with pytest.raises(DotBotExecutionError, match=r"finish_reason=length \(14 chars\)"):
+        client.execute_structured("review", output_schema={"type": "object"})
+
+    err = capsys.readouterr().err
+    assert "ended with finish_reason=length, 14 chars" in err
+    assert "may have spent its token budget on reasoning" in err
+
+
+def test_provider_fields_cannot_inject_workflow_commands(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    forged = _text_response("{}")
+    forged["choices"][0]["finish_reason"] = "error\n::error::forged"
+    client = _client(tmp_path, _ScriptedTransport([_text_response("thinking"), forged]))
+    with pytest.raises(DotBotExecutionError, match="finish_reason=unrecognized"):
+        client.execute_structured("review", output_schema={"type": "object"})
+    err = capsys.readouterr().err
+    assert "finish_reason=unrecognized, 2 chars" in err
+    assert "::error::forged" not in err
+
+    error = {"error": {"code": "502\n::error::x", "metadata": {"error_type": "a\n::warning::y"}}}
+    client = _client(tmp_path, _ScriptedTransport([error]))
+    with pytest.raises(DotBotExecutionError) as caught:
+        client.execute_text("inspect")
+    assert "\n" not in str(caught.value)
+
+    # Lowercase text that is not a documented error type never reaches the exception.
+    undocumented: dict[str, Any] = {
+        "error": {"code": 400, "metadata": {"error_type": "contact_attacker_at_evil"}}
+    }
+    client = _client(tmp_path, _ScriptedTransport([undocumented]))
+    with pytest.raises(DotBotExecutionError, match="code=400 type=unknown$"):
+        client.execute_text("inspect")
+
+
+@pytest.mark.parametrize("finish", [["stop"], {"reason": "stop"}, 7])
+def test_malformed_finish_reason_is_reported_not_raised(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], finish: Any
+) -> None:
+    reply = _text_response("{}")
+    reply["choices"][0]["finish_reason"] = finish
+    client = _client(tmp_path, _ScriptedTransport([_text_response("thinking"), reply]))
+
+    with pytest.raises(DotBotExecutionError, match="finish_reason=unrecognized"):
+        client.execute_structured("review", output_schema={"type": "object"})
+    assert "finish_reason=unrecognized" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        {"role": "assistant", "content": None, "refusal": "I can't help with that."},
+        {"role": "assistant", "content": "{}", "refusal": "I can't help with that."},
+        {"role": "assistant", "content": [{"type": "text", "text": "{}"}]},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "c", "type": "function", "function": {"name": "x"}}],
+        },
+    ],
+)
+def test_uninspectable_structured_reply_is_an_error_not_a_retry(
+    tmp_path: Path, message: dict[str, Any]
+) -> None:
+    reply = {"choices": [{"message": message, "finish_reason": "stop"}]}
+    client = _client(tmp_path, _ScriptedTransport([_text_response("thinking"), reply]))
+
+    with pytest.raises(
+        DotBotExecutionError, match="refusal, tool calls or non-text structured output"
+    ):
+        client.execute_structured("review", output_schema={"type": "object"})
+
+
+@pytest.mark.parametrize("finish", ["length", "content_filter", "error", "something_new"])
+@pytest.mark.parametrize("content", ["", '{"overall_correctness": "patch is correct"}'])
+def test_abnormal_turn_is_an_error_not_a_retry(tmp_path: Path, finish: str, content: str) -> None:
+    reply = _text_response(content)
+    reply["choices"][0]["finish_reason"] = finish
+    client = _client(tmp_path, _ScriptedTransport([_text_response("thinking"), reply]))
+    expected = finish if finish != "something_new" else "unrecognized"
+
+    with pytest.raises(
+        DotBotExecutionError, match=rf"finish_reason={expected} \({len(content)} chars\)"
+    ):
+        client.execute_structured("review", output_schema={"type": "object"})
+
+
+def test_abnormal_turn_keeps_the_partial_reply_in_the_saved_thread(tmp_path: Path) -> None:
+    truncated = _text_response('{"overall_corr')
+    truncated["choices"][0]["finish_reason"] = "length"
+    client = _client(tmp_path, _ScriptedTransport([_text_response("thinking"), truncated]))
+
+    with pytest.raises(DotBotExecutionError, match="finish_reason=length"):
+        client.execute_structured("review", output_schema={"type": "object"})
+
+    [saved] = list((tmp_path / "threads").glob("*.json"))
+    assert '{\\"overall_corr' in saved.read_text()
+
+
+def test_refused_reply_text_is_kept_in_the_saved_thread(tmp_path: Path) -> None:
+    reply = {
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "partial refusal text",
+                    "refusal": "no",
+                },
+                "finish_reason": "stop",
+            }
+        ]
+    }
+    client = _client(tmp_path, _ScriptedTransport([_text_response("thinking"), reply]))
+
+    with pytest.raises(DotBotExecutionError, match="refusal"):
+        client.execute_structured("review", output_schema={"type": "object"})
+
+    [saved] = list((tmp_path / "threads").glob("*.json"))
+    assert "partial refusal text" in saved.read_text()
+
+
+@pytest.mark.parametrize("error_type", [["rate_limit_exceeded"], {"x": 1}])
+def test_unhashable_error_type_is_reported_as_unknown(tmp_path: Path, error_type: Any) -> None:
+    error = {"error": {"code": 429, "metadata": {"error_type": error_type}}}
+    client = _client(tmp_path, _ScriptedTransport([error]))
+
+    with pytest.raises(DotBotExecutionError, match="code=429 type=unknown$"):
+        client.execute_text("inspect")
+
+
+def test_non_text_reply_is_kept_in_the_saved_thread(tmp_path: Path) -> None:
+    reply = {
+        "choices": [
+            {
+                "message": {"role": "assistant", "content": [{"type": "text", "text": "payload"}]},
+                "finish_reason": "stop",
+            }
+        ]
+    }
+    client = _client(tmp_path, _ScriptedTransport([_text_response("thinking"), reply]))
+
+    with pytest.raises(DotBotExecutionError, match="non-text structured output"):
+        client.execute_structured("review", output_schema={"type": "object"})
+
+    [saved] = list((tmp_path / "threads").glob("*.json"))
+    assert "payload" in saved.read_text()

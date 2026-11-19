@@ -8,7 +8,11 @@ from typing import Any, cast
 import pytest
 
 from cli.core.config import ReviewConfig
-from cli.core.exceptions import DotBotExecutionError, ReviewContractError
+from cli.core.exceptions import (
+    CorrectableReviewError,
+    DotBotExecutionError,
+    ReviewContractError,
+)
 from cli.core.models import PriorDotBotReviewComment
 from cli.review.coordinator import PanelTurn, ReviewCoordinator
 from cli.review.review_prompt import load_guidelines, load_panel_instructions
@@ -421,7 +425,18 @@ def test_contract_failure_diagnostics_do_not_expose_credentials(tmp_path: Path) 
 
 @pytest.mark.parametrize(
     "correction",
-    ["valid", "drop-finding", "change-vote", "still-invalid", "masked-conflict", "invalid-json"],
+    [
+        "valid",
+        "drop-finding",
+        "change-vote",
+        "still-invalid",
+        "masked-conflict",
+        "invalid-json",
+        "empty",
+        "fenced",
+        "invalid-json-twice",
+        "truncated-finding",
+    ],
 )
 def test_real_client_repairs_one_turn_without_erasing_findings_or_votes(
     tmp_path: Path,
@@ -457,14 +472,24 @@ def test_real_client_repairs_one_turn_without_erasing_findings_or_votes(
                 votes = {item["issue_id"]: True for item in _ledger(prompt)}
                 if "Phase: investigation." in prompt and model == "primary":
                     initial_calls[model] += 1
-                    if initial_calls[model] == 1 or correction == "still-invalid":
+                    if initial_calls[model] == 1 or correction in {
+                        "still-invalid",
+                        "invalid-json-twice",
+                    }:
                         text = _turn(findings=[finding], votes=votes, correct=True)
                         if correction == "masked-conflict":
                             invalid = json.loads(text)
                             del invalid["security_summary"]
                             text = json.dumps(invalid)
-                        elif correction == "invalid-json":
+                        elif correction in {"invalid-json", "invalid-json-twice"}:
                             text = "not valid JSON"
+                        elif correction == "empty":
+                            text = ""
+                        elif correction == "truncated-finding":
+                            # Cut-off JSON that already shows a finding must not be corrected away.
+                            text = text[: text.index('"title"') + 20]
+                        elif correction == "fenced":
+                            text = "```json\n" + _turn(findings=[finding], votes=votes) + "\n```"
                     else:
                         text = _turn(
                             findings=[] if correction == "drop-finding" else [finding],
@@ -486,24 +511,44 @@ def test_real_client_repairs_one_turn_without_erasing_findings_or_votes(
         )
 
     panel = ReviewCoordinator(config, factory)
-    if correction == "valid":
+    # Prose can state a verdict, so a non-JSON reply fails closed like a reply with findings.
+    uncorrectable = {"masked-conflict", "truncated-finding", "invalid-json", "invalid-json-twice"}
+    if correction in {"valid", "empty", "fenced"}:
         result = _run(panel, tmp_path, [prior])
         assert result.overall_correctness == "patch is incorrect"
         assert len(result.findings) == 1
         assert result.findings[0].priority == 2
         assert result.carried_forward_comment_ids == ["prior"]
         assert len(panel.transcript) == 6
-        assert schema_calls == {"primary": 4, "secondary": 3}
+        # A fenced reply is accepted as is; every other repaired case needs one correction.
+        assert schema_calls == {"primary": 3 if correction == "fenced" else 4, "secondary": 3}
     else:
         with pytest.raises(DotBotExecutionError, match="investigation failed for primary"):
             _run(panel, tmp_path, [prior])
         assert not panel.transcript
-        assert initial_calls["primary"] == (
-            1 if correction in {"masked-conflict", "invalid-json"} else 2
-        )
-    assert capsys.readouterr().out.count("[review-panel-correction]") == (
-        0 if correction in {"masked-conflict", "invalid-json"} else 1
+        assert initial_calls["primary"] == (1 if correction in uncorrectable else 2)
+    captured = capsys.readouterr()
+    uncorrected = uncorrectable | {"fenced"}
+    assert captured.out.count("[review-panel-correction]") == (
+        0 if correction in uncorrected else 1
     )
+    rejected = [
+        line for line in captured.err.splitlines() if line.startswith("[review-panel-rejected]")
+    ]
+    if correction == "fenced":
+        assert rejected == []
+    elif correction in uncorrectable:
+        assert len(rejected) == 1
+        assert "not correctable: the reply may hold findings or votes" in rejected[0]
+    else:
+        assert "| correction allowed |" in rejected[0]
+    if correction in {"drop-finding", "change-vote"}:
+        assert "reply 2: Correction changed findings or disposition actions" in rejected[1]
+    if correction == "still-invalid":
+        assert "| correction rejected too |" in rejected[1]
+    if correction == "empty":
+        assert "Panel response is empty" in rejected[0]
+        assert "ended with finish_reason=stop, 0 chars" in captured.err
 
 
 def test_shared_client_is_rejected(tmp_path: Path) -> None:
@@ -591,3 +636,262 @@ def test_cost_summary_marks_reviewer_still_running_after_abort_unavailable(
         )
     finally:
         release.set()
+
+
+def test_rejected_reply_log_is_redacted_bounded_and_single_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    reply = "SECRET-MODEL ##[set-output name=x;]y " + "x" * 2000 + "\n::error::forged"
+
+    def handler(prompt: str, kwargs: dict[str, Any]) -> str:
+        if kwargs["model_name"] == "secondary":
+            kwargs["output_validator"](reply)
+        return _turn()
+
+    for stream_output in (True, False):
+        config = _config(tmp_path)
+        config.stream_output = stream_output
+        panel, _ = _panel(config, handler)
+        with pytest.raises(
+            DotBotExecutionError,
+            match="investigation failed for secondary: ReviewContractError: "
+            "Panel response is not valid JSON: Expecting value",
+        ):
+            _run(panel, tmp_path)
+        err = capsys.readouterr().err
+        assert "SECRET-MODEL" not in err
+        assert not any(line.startswith("::") for line in err.splitlines())
+        assert "##[" not in err
+        [line] = [line for line in err.splitlines() if "[review-panel-rejected]" in line]
+        assert f"| not correctable: the reply may hold findings or votes | {len(reply)} chars" in (
+            line
+        )
+        if stream_output:
+            assert '| excerpt "[REDACTED] #\\u0023[set-output name=x;]y xxx' in line
+            assert "\\n::error::forged" in line
+            assert len(line) < 1000
+        else:
+            assert "excerpt" not in line
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "The patch is incorrect: the caller is unauthorized.",
+        "not json",
+        '{"overall_correctness": "patch is incorrect", "findings": []',
+        '{"dispositions": {"F1": {"action": "retain"}}}',
+        '[{"title": "a finding without its envelope"}]',
+        # Escapes and truncation hide a finding, a vote or a verdict from a plain text scan.
+        '{"\\u0066indings": [{"title": "hidden"',
+        '{"dispositions": {"F1": {"action": "ret',
+        '{"overall_correctness": "patch is inc',
+        '{"findings": [',
+        # Duplicate keys: plain parsing would keep only the empty, last value.
+        '{"\\u0066indings": [{"title": "x"}], "findings": []}',
+        '{"overall_correctness": "patch is correct", "findings": [], "findings": []}',
+        # Prior-finding decisions, findings in the wrong shape and cut-off bare arrays.
+        '{"carried_forward": [{"comment_id": "1"}], "findings": []',
+        '{"carried_forward": [',
+        '{"findings": {"title": "x"',
+        '[{"title": "a cut-off finding"',
+        # A malformed vote and a bare array inside a fence whose closing line was cut off.
+        '{"dispositions": {"F1": "retain"}}',
+        '{"dispositions": {"F1": {"action": "keep"}}}',
+        '```json\n[{"title": "a cut-off finding"',
+        # Non-JSON verdicts, findings without the envelope, and decision-free but cut-off JSON.
+        '{overall_correctness: "patch is incorrect"}',
+        '{"title": "x", "body": "y", "code_location": {}}',
+        '{"overall_correctness": "patch is correct", "findings": []',
+        '{"dispositions": {"F1": {"action": "reject"}}, "extra": 1}',
+        # Findings hiding in a reject vote or in a text field.
+        '{"dispositions": {"F1": {"action": "reject", "findings": [{"title": "x"}]}}}',
+        '{"dispositions": {"F1": {"action": "reject", "reason": ["x"]}}}',
+        '{"message": {"title": "x", "body": "y"}, "findings": []}',
+        # Not JSON, although Python's parser accepts it.
+        '{"overall_confidence_score": NaN}',
+    ],
+)
+def test_rejected_reply_that_may_hold_a_decision_fails_closed(reply: str) -> None:
+    with pytest.raises(ReviewContractError) as caught:
+        PanelTurn.parse(reply, {"F1"})
+    assert not isinstance(caught.value, CorrectableReviewError)
+
+
+def test_fence_is_only_stripped_around_the_whole_reply() -> None:
+    assert PanelTurn.parse("```\n" + _turn() + "\n```", set()).review.findings == []
+    assert PanelTurn.parse("```json\r\n" + _turn() + "\r\n```\r\n", set()).review.findings == []
+    # An empty fenced reply is unwrapped, so it gets the correction an empty reply gets.
+    for empty in ("```json\n```", "```\r\n```\r\n"):
+        with pytest.raises(CorrectableReviewError, match="Panel response is empty"):
+            PanelTurn.parse(empty, set())
+    huge_int = _turn().replace(
+        '"overall_confidence_score": 0.9', '"overall_confidence_score": 1' + "0" * 400
+    )
+    with pytest.raises(ReviewContractError, match="JSON number is outside the supported range"):
+        PanelTurn.parse("```json\n" + huge_int + "\n```", set())
+    overflow = _turn().replace(
+        '"overall_confidence_score": 0.9', '"overall_confidence_score": 1e309'
+    )
+    with pytest.raises(ReviewContractError, match="JSON number is outside the supported range"):
+        PanelTurn.parse(overflow, set())
+    with pytest.raises(ReviewContractError, match="NaN is not valid JSON"):
+        PanelTurn.parse(
+            "```json\n"
+            + _turn().replace('"overall_confidence_score": 0.9', '"overall_confidence_score": NaN')
+            + "\n```",
+            set(),
+        )
+    # JSON is never pulled out of prose; the embedded object could hold findings, so no retry.
+    with pytest.raises(ReviewContractError, match="not valid JSON") as caught:
+        PanelTurn.parse("Here you go:\n```json\n" + _turn() + "\n```", set())
+    assert not isinstance(caught.value, CorrectableReviewError)
+
+
+@pytest.mark.parametrize(
+    ("error", "expected"),
+    [
+        (
+            DotBotExecutionError('OpenRouter HTTP 502: {"body": "upstream SECRET-MODEL"}'),
+            "DotBotExecutionError: OpenRouter HTTP 502",
+        ),
+        (
+            DotBotExecutionError("OpenRouter request failed: timed out\nSECRET-MODEL"),
+            "DotBotExecutionError: OpenRouter request failed",
+        ),
+        (
+            DotBotExecutionError("Codex error: arbitrary runtime text"),
+            "DotBotExecutionError: Codex error",
+        ),
+        (
+            DotBotExecutionError(
+                "OpenRouter returned an error instead of choices: code=429 type=rate_limit_exceeded"
+            ),
+            "DotBotExecutionError: OpenRouter returned an error instead of choices: "
+            "code=429 type=rate_limit_exceeded",
+        ),
+        (
+            DotBotExecutionError("OpenRouter did not return structured output on turn 2."),
+            "DotBotExecutionError: OpenRouter did not return structured output on turn 2.",
+        ),
+        (KeyError("model-controlled text"), "KeyError"),
+    ],
+)
+def test_failure_detail_names_own_errors_without_provider_bodies(
+    tmp_path: Path, error: BaseException, expected: str
+) -> None:
+    def handler(prompt: str, kwargs: dict[str, Any]) -> str:
+        if kwargs["model_name"] == "secondary":
+            raise error
+        return _turn()
+
+    panel, _ = _panel(_config(tmp_path), handler)
+    with pytest.raises(DotBotExecutionError) as caught:
+        _run(panel, tmp_path)
+    assert str(caught.value) == f"Panel investigation failed for secondary: {expected}"
+
+
+@pytest.mark.parametrize(
+    "reply",
+    [
+        "",
+        "   \n",
+        "{}",
+        '{"overall_correctness": "patch is correct", "findings": [], "message": ""}',
+        '{"dispositions": {"F1": {"action": "reject", "reason": "", "evidence": ""}}}',
+    ],
+)
+def test_rejected_reply_without_a_possible_decision_is_correctable(reply: str) -> None:
+    with pytest.raises(CorrectableReviewError):
+        PanelTurn.parse(reply, set())
+
+
+@pytest.mark.parametrize("keep_reject", [True, False])
+def test_correction_cannot_flip_an_explicit_reject_vote(tmp_path: Path, keep_reject: bool) -> None:
+    prior = PriorDotBotReviewComment(
+        id="prior",
+        thread_id="thread",
+        path="src.py",
+        line=1,
+        body="Prior issue",
+        current_code="authorize(user)",
+        is_currently_applicable=True,
+    )
+
+    def handler(prompt: str, kwargs: dict[str, Any]) -> str:
+        if kwargs["model_name"] != "primary" or "Phase: investigation." not in prompt:
+            return _turn(votes={item["issue_id"]: False for item in _ledger(prompt)})
+        # First reply: a shape error (empty security summary) next to an explicit reject.
+        first = json.loads(_turn(votes={"P1": False}))
+        first["security_summary"] = ""
+        # An ID outside the ledger is not locked, so it cannot fail a valid correction.
+        first["dispositions"]["F99"] = {"action": "reject", "reason": "r", "evidence": "e"}
+        validator = kwargs["output_validator"]
+        with pytest.raises(CorrectableReviewError):
+            validator(json.dumps(first))
+        corrected = _turn(votes={"P1": not keep_reject}, correct=keep_reject)
+        validator(corrected)
+        return corrected
+
+    panel, _ = _panel(_config(tmp_path), handler)
+    if keep_reject:
+        assert _run(panel, tmp_path, [prior]).carried_forward_comment_ids == []
+    else:
+        with pytest.raises(
+            DotBotExecutionError, match="Correction changed findings or disposition"
+        ):
+            _run(panel, tmp_path, [prior])
+
+
+def test_streamed_transcript_neutralises_legacy_workflow_commands(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    panel, _ = _panel(_config(tmp_path), lambda prompt, kwargs: _turn(message="Hi ##[error]x"))
+    _run(panel, tmp_path)
+    out = capsys.readouterr().out
+    assert "##[" not in out
+    entry = json.loads(out.splitlines()[0].removeprefix("[review-panel] "))
+    assert entry["message"] == "Hi ##[error]x"  # the JSON escape decodes back unchanged
+
+
+def test_overflowing_number_is_logged_without_its_token(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    token = "1" + "0" * 400 + ".0"
+
+    def handler(prompt: str, kwargs: dict[str, Any]) -> str:
+        if kwargs["model_name"] == "secondary":
+            reply = _turn().replace(
+                '"overall_confidence_score": 0.9', f'"overall_confidence_score": {token}'
+            )
+            kwargs["output_validator"](reply)
+        return _turn()
+
+    config = _config(tmp_path)
+    config.stream_output = False
+    panel, _ = _panel(config, handler)
+    with pytest.raises(DotBotExecutionError, match="outside the supported range"):
+        _run(panel, tmp_path)
+    err = capsys.readouterr().err
+    assert "JSON number is outside the supported range" in err
+    assert "0" * 50 not in err
+
+
+def test_rejected_reply_excerpt_redacts_json_escaped_credentials(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # JSON escapes that spell SECRET-MODEL and SECRET-GITHUB without the literal text.
+    escaped = r"{SECRET-MODEL and SECRET-GITHUB"
+
+    def handler(prompt: str, kwargs: dict[str, Any]) -> str:
+        if kwargs["model_name"] == "secondary":
+            kwargs["output_validator"](escaped)
+        return _turn()
+
+    panel, _ = _panel(_config(tmp_path), handler)
+    with pytest.raises(DotBotExecutionError):
+        _run(panel, tmp_path)
+    err = capsys.readouterr().err
+    assert "u0053ECRET" not in err
+    assert "u002dGITHUB" not in err
+    assert err.count("[REDACTED]") >= 2

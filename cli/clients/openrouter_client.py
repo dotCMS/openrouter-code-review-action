@@ -278,12 +278,16 @@ class OpenRouterClient:
         )
         messages.append({"role": "user", "content": schema_prompt})
         for correction in range(2):
-            content = self._schema_turn(
-                messages,
-                output_schema=output_schema,
-                model_name=model_name,
-                reasoning_effort=reasoning_effort,
-            )
+            try:
+                content = self._schema_turn(
+                    messages,
+                    output_schema=output_schema,
+                    model_name=model_name,
+                    reasoning_effort=reasoning_effort,
+                )
+            except DotBotExecutionError:
+                self._save_thread(thread_id, messages, model_name=model_name)  # keep for diagnosis
+                raise
             if content.strip():
                 messages.append({"role": "assistant", "content": content})
             if output_validator is None:
@@ -298,6 +302,7 @@ class OpenRouterClient:
                     self.config.model_timeout_seconds
                     and time.monotonic() - started >= self.config.model_timeout_seconds
                 ):
+                    self._save_thread(thread_id, messages, model_name=model_name)  # for diagnosis
                     raise DotBotExecutionError(
                         "Model timeout reached before output correction"
                     ) from exc
@@ -450,14 +455,59 @@ class OpenRouterClient:
         )
         choices = response.get("choices")
         if not isinstance(choices, list) or not choices:
-            raise DotBotExecutionError("OpenRouter response had no choices")
-        message = choices[0].get("message")
+            raise _missing_choices_error(response)
+        choice = choices[0]
+        message = choice.get("message") if isinstance(choice, dict) else None
         if not isinstance(message, dict):
             raise DotBotExecutionError("OpenRouter response had no message")
         content = message.get("content")
-        if not isinstance(content, str):
-            return ""
-        return content
+        text = content if isinstance(content, str) else ""
+        finish = choice.get("finish_reason")
+        if not (finish is None or isinstance(finish, str)) or finish not in _KNOWN_FINISH_REASONS:
+            finish = "unrecognized"  # provider text never reaches the log
+        if finish not in (None, "stop") or not text.strip() or message.get("refusal"):
+            hint = {
+                "length": "output was cut off; the model may have spent its token budget on reasoning",
+                "content_filter": "the model or a provider filter refused",
+                "error": "the provider failed mid-generation",
+            }.get(str(finish), "")
+            print(
+                f"Warning: OpenRouter structured turn for "
+                f"{self._resolved_model(model_name, online_suffix=False)} ended with "
+                f"finish_reason={finish}, {len(text)} chars"
+                + ("; refusal returned" if message.get("refusal") else "")
+                + (f" ({hint})" if hint else ""),
+                file=sys.stderr,
+                flush=True,
+            )
+        problem = None
+        if (
+            message.get("refusal")
+            or message.get("tool_calls")
+            or (not text.strip() and not isinstance(content, (str, type(None))))
+        ):
+            # Never let a correction replace a reply nobody could inspect.
+            problem = "OpenRouter returned a refusal, tool calls or non-text structured output"
+        elif finish not in (None, "stop"):
+            # A cut-off, filtered or failed turn is incomplete, so never validate or correct it.
+            problem = (
+                f"OpenRouter structured turn ended with finish_reason={finish} ({len(text)} chars)"
+            )
+        if problem is not None:
+            # Keep what the model sent in the saved thread for diagnosis. Anything beyond plain
+            # text is stored as a JSON string, so the thread stays a valid conversation.
+            raw = {
+                key: message[key]
+                for key in ("content", "refusal", "tool_calls")
+                if message.get(key) is not None
+            }
+            kept = text if set(raw) <= {"content"} and isinstance(content, str) else ""
+            if not kept and raw:
+                kept = json.dumps(raw, ensure_ascii=True, default=str)
+            if kept:
+                messages.append({"role": "assistant", "content": kept})
+            raise DotBotExecutionError(problem)
+        return text
 
     # ------------------------------------------------------------------
     # HTTP
@@ -622,11 +672,68 @@ class OpenRouterClient:
 # ----------------------------------------------------------------------
 
 
+_KNOWN_FINISH_REASONS = {None, "stop", "length", "content_filter", "error", "tool_calls"}
+
+
+# OpenRouter's documented typed error codes (docs: api-reference/errors, "Typed error codes").
+# Only these may appear in an exception that act mode can post to a PR.
+_OPENROUTER_ERROR_TYPES = frozenset(
+    {
+        "authentication",
+        "content_policy_violation",
+        "context_length_exceeded",
+        "image_download_failed",
+        "image_not_found",
+        "image_too_large",
+        "image_too_small",
+        "invalid_image",
+        "invalid_prompt",
+        "invalid_request",
+        "max_tokens_exceeded",
+        "not_found",
+        "payload_too_large",
+        "payment_required",
+        "permission_denied",
+        "precondition_failed",
+        "provider_overloaded",
+        "provider_unavailable",
+        "rate_limit_exceeded",
+        "refusal",
+        "server",
+        "string_too_long",
+        "timeout",
+        "token_limit_exceeded",
+        "unmapped",
+        "unprocessable",
+        "unsupported_image_format",
+    }
+)
+
+
+def _missing_choices_error(response: dict[str, Any]) -> DotBotExecutionError:
+    """Describe a response without choices, using OpenRouter's in-body error when present.
+
+    The exception text can reach a public PR reply (act mode) and CI logs, so it carries only
+    a validated status code and error type, never the provider's free-form message.
+    """
+    error = response.get("error")
+    if not isinstance(error, dict):
+        return DotBotExecutionError("OpenRouter response had no choices")
+    code = error.get("code")
+    metadata = error.get("metadata")
+    error_type = metadata.get("error_type") if isinstance(metadata, dict) else None
+    return DotBotExecutionError(
+        "OpenRouter returned an error instead of choices: "
+        f"code={code if type(code) is int and 100 <= code <= 599 else 'unknown'} "
+        f"type={error_type if isinstance(error_type, str) and error_type in _OPENROUTER_ERROR_TYPES else 'unknown'}"
+    )
+
+
 def _result_from_response(response: dict[str, Any]) -> StreamingResult:
     """Convert a non-streaming chat-completion response to a StreamingResult."""
     choices = response.get("choices")
     if not isinstance(choices, list) or not choices:
-        raise DotBotExecutionError("OpenRouter response had no choices")
+        raise _missing_choices_error(response)
     choice = choices[0]
     if not isinstance(choice, dict):
         raise DotBotExecutionError("OpenRouter response choice was not an object")
