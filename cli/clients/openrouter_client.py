@@ -714,7 +714,7 @@ def _missing_choices_error(response: dict[str, Any]) -> DotBotExecutionError:
     return DotBotExecutionError(
         "OpenRouter returned an error instead of choices: "
         f"code={code if type(code) is int and 100 <= code <= 599 else 'unknown'} "
-        f"type={error_type if error_type in _OPENROUTER_ERROR_TYPES else 'unknown'}"
+        f"type={error_type if isinstance(error_type, str) and error_type in _OPENROUTER_ERROR_TYPES else 'unknown'}"
     )
 
 

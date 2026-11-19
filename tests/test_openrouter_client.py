@@ -798,3 +798,12 @@ def test_refused_reply_text_is_kept_in_the_saved_thread(tmp_path: Path) -> None:
 
     [saved] = list((tmp_path / "threads").glob("*.json"))
     assert "partial refusal text" in saved.read_text()
+
+
+@pytest.mark.parametrize("error_type", [["rate_limit_exceeded"], {"x": 1}])
+def test_unhashable_error_type_is_reported_as_unknown(tmp_path: Path, error_type: Any) -> None:
+    error = {"error": {"code": 429, "metadata": {"error_type": error_type}}}
+    client = _client(tmp_path, _ScriptedTransport([error]))
+
+    with pytest.raises(DotBotExecutionError, match="code=429 type=unknown$"):
+        client.execute_text("inspect")
