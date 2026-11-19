@@ -103,6 +103,13 @@ def _carries_decision(text: str) -> bool:
         return True
     if not isinstance(payload, dict) or not set(payload) <= set(PANEL_OUTPUT_SCHEMA["properties"]):
         return True
+    decision_fields = {"findings", "carried_forward", "dispositions"}
+    if any(
+        isinstance(value, (dict, list))
+        for key, value in payload.items()
+        if key not in decision_fields
+    ):
+        return True  # a finding could be hiding in a text field
     dispositions = payload.get("dispositions", {})
     return (
         payload.get("findings", []) != []
@@ -110,7 +117,10 @@ def _carries_decision(text: str) -> bool:
         or payload.get("overall_correctness", "patch is correct") != "patch is correct"
         or not isinstance(dispositions, dict)
         or any(
-            not isinstance(item, dict) or item.get("action") != "reject"
+            not isinstance(item, dict)
+            or not set(item) <= set(_DISPOSITION_SCHEMA["properties"])
+            or item.get("action") != "reject"
+            or any(isinstance(value, (dict, list)) for value in item.values())
             for item in dispositions.values()
         )
     )

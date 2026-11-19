@@ -716,3 +716,20 @@ def test_malformed_finish_reason_is_reported_not_raised(
 
     assert client.execute_structured("review", output_schema={"type": "object"}) == "{}"
     assert "finish_reason=unrecognized" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        {"role": "assistant", "content": None, "refusal": "I can't help with that."},
+        {"role": "assistant", "content": [{"type": "text", "text": "{}"}]},
+    ],
+)
+def test_uninspectable_structured_reply_is_an_error_not_a_retry(
+    tmp_path: Path, message: dict[str, Any]
+) -> None:
+    reply = {"choices": [{"message": message, "finish_reason": "stop"}]}
+    client = _client(tmp_path, _ScriptedTransport([_text_response("thinking"), reply]))
+
+    with pytest.raises(DotBotExecutionError, match="refusal or non-text structured output"):
+        client.execute_structured("review", output_schema={"type": "object"})

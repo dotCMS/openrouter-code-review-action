@@ -476,6 +476,13 @@ class OpenRouterClient:
                 file=sys.stderr,
                 flush=True,
             )
+        if not text.strip() and (
+            message.get("refusal") or not isinstance(content, (str, type(None)))
+        ):
+            # Never let a correction replace a reply nobody could inspect.
+            raise DotBotExecutionError(
+                "OpenRouter returned a refusal or non-text structured output"
+            )
         return text
 
     # ------------------------------------------------------------------

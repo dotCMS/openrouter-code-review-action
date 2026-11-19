@@ -703,6 +703,10 @@ def test_rejected_reply_log_is_redacted_bounded_and_single_line(
         '{"title": "x", "body": "y", "code_location": {}}',
         '{"overall_correctness": "patch is correct", "findings": []',
         '{"dispositions": {"F1": {"action": "reject"}}, "extra": 1}',
+        # Findings hiding in a reject vote or in a text field.
+        '{"dispositions": {"F1": {"action": "reject", "findings": [{"title": "x"}]}}}',
+        '{"dispositions": {"F1": {"action": "reject", "reason": ["x"]}}}',
+        '{"message": {"title": "x", "body": "y"}, "findings": []}',
     ],
 )
 def test_rejected_reply_that_may_hold_a_decision_fails_closed(reply: str) -> None:
