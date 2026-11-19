@@ -649,3 +649,54 @@ def test_schema_turn_logs_elapsed_and_accumulates_usage(
     stderr = capsys.readouterr().err
     assert "(schema turn) elapsed=" in stderr
     assert "prompt_tokens=10" in stderr
+
+
+def test_in_body_error_without_choices_is_described(tmp_path: Path) -> None:
+    error = {
+        "error": {
+            "code": 502,
+            "message": "Provider\nreturned error",
+            "metadata": {"error_type": "provider_error"},
+        }
+    }
+    client = _client(tmp_path, _ScriptedTransport([error]))
+
+    with pytest.raises(
+        DotBotExecutionError,
+        match="error instead of choices: code=502 type=provider_error message=Provider returned error",
+    ):
+        client.execute_text("inspect")
+
+
+def test_truncated_structured_turn_warns_with_finish_reason(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    truncated = _text_response('{"overall_corr')
+    truncated["choices"][0]["finish_reason"] = "length"
+    client = _client(tmp_path, _ScriptedTransport([_text_response("thinking"), truncated]))
+
+    assert client.execute_structured("review", output_schema={"type": "object"}) == (
+        '{"overall_corr'
+    )
+
+    err = capsys.readouterr().err
+    assert "ended with finish_reason=length, 14 chars" in err
+    assert "may have spent its token budget on reasoning" in err
+
+
+def test_provider_fields_cannot_inject_workflow_commands(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    forged = _text_response("{}")
+    forged["choices"][0]["finish_reason"] = "error\n::error::forged"
+    client = _client(tmp_path, _ScriptedTransport([_text_response("thinking"), forged]))
+    client.execute_structured("review", output_schema={"type": "object"})
+    err = capsys.readouterr().err
+    assert "finish_reason=unrecognized, 2 chars" in err
+    assert "::error::forged" not in err
+
+    error = {"error": {"code": "502\n::error::x", "metadata": {"error_type": "a\n::warning::y"}}}
+    client = _client(tmp_path, _ScriptedTransport([error]))
+    with pytest.raises(DotBotExecutionError) as caught:
+        client.execute_text("inspect")
+    assert "\n" not in str(caught.value)

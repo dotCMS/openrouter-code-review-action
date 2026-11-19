@@ -6,6 +6,7 @@ import json
 import os
 import queue
 import re
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -73,6 +74,52 @@ def _panel_output_schema(issue_ids: set[str]) -> dict[str, Any]:
     }
 
 
+# A whole reply wrapped in one Markdown code fence; JSON is never extracted from prose.
+_FENCED_REPLY = re.compile(r"\A\s*```(?:json)?[ \t]*\n(.*)\n[ \t]*```\s*\Z", re.DOTALL)
+# Raw-text signs of a possible decision, matched even in truncated JSON: a findings array
+# that is not visibly empty, any action other than reject, any verdict other than approval,
+# and any \\u escape, which could spell one of these keys or values out of sight.
+_DECISION_MARKERS = re.compile(
+    r'"findings"\s*:\s*\[(?!\s*\])'
+    r'|"action"\s*:(?!\s*"reject")'
+    r'|"overall_correctness"\s*:(?!\s*"patch is correct")'
+    r"|\\u"
+)
+_EXCERPT_CHARS = 300
+
+
+def _carries_decision(text: str) -> bool:
+    """Whether a rejected reply may hold a decision that a correction could erase."""
+    if _DECISION_MARKERS.search(text):
+        return True
+    try:
+        payload = json.loads(text, object_pairs_hook=_unique_json_object)
+    except ReviewContractError:
+        return True  # duplicate keys: plain parsing would keep only the last value
+    except ValueError:
+        return False
+    if not isinstance(payload, dict):
+        return True
+    dispositions = payload.get("dispositions")
+    return (
+        bool(payload.get("findings"))
+        or payload.get("overall_correctness") == "patch is incorrect"
+        or (
+            isinstance(dispositions, dict)
+            and any(
+                isinstance(item, dict) and item.get("action") == "retain"
+                for item in dispositions.values()
+            )
+        )
+    )
+
+
+def _excerpt(text: str) -> str:
+    if len(text) <= 2 * _EXCERPT_CHARS:
+        return text
+    return f"{text[:_EXCERPT_CHARS]} ... {text[-_EXCERPT_CHARS:]}"
+
+
 def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
@@ -92,10 +139,28 @@ class PanelTurn:
 
     @classmethod
     def parse(cls, output: str, issue_ids: set[str]) -> PanelTurn:
+        fenced = _FENCED_REPLY.match(output)
+        text = fenced.group(1) if fenced else output
+        try:
+            return cls._parse(text, issue_ids)
+        except CorrectableReviewError:
+            raise
+        except ReviewContractError as exc:
+            if _carries_decision(text):
+                raise
+            # Nothing decided can be lost, so one correction is equivalent to a fresh attempt.
+            raise CorrectableReviewError(str(exc)) from exc
+
+    @classmethod
+    def _parse(cls, output: str, issue_ids: set[str]) -> PanelTurn:
+        if not output.strip():
+            raise ReviewContractError("Panel response is empty")
         try:
             payload = json.loads(output, object_pairs_hook=_unique_json_object)
         except json.JSONDecodeError as exc:
-            raise ReviewContractError("Panel response is not valid JSON") from exc
+            raise ReviewContractError(
+                f"Panel response is not valid JSON: {exc.msg} at line {exc.lineno} column {exc.colno}"
+            ) from exc
         if not isinstance(payload, dict) or set(payload) != set(PANEL_OUTPUT_SCHEMA["required"]):
             raise ReviewContractError("Panel response has missing or unknown fields")
         for field in ("message", "security_summary", "overall_explanation"):
@@ -356,11 +421,9 @@ class ReviewCoordinator:
                 except ReviewContractError as exc:
                     if isinstance(exc, _PanelVerdictConflict) and protected is None:
                         protected = exc.turn
-                    if (
-                        validations == 1
-                        and isinstance(exc, CorrectableReviewError)
-                        and self.config.stream_output
-                    ):
+                    correctable = validations == 1 and isinstance(exc, CorrectableReviewError)
+                    self._log_rejected_reply(model, phase, validations, exc, output, correctable)
+                    if correctable and self.config.stream_output:
                         print(
                             self._redact(
                                 f"[review-panel-correction] {model} {phase}: one correction requested: {exc}"
@@ -405,19 +468,42 @@ class ReviewCoordinator:
             except queue.Empty as exc:
                 pending = ", ".join(model for model in participants if model not in turns)
                 raise DotBotExecutionError(
-                    f"Panel {phase} timed out waiting for {pending}"
+                    f"Panel {phase} timed out after {self.config.model_timeout_seconds}s "
+                    f"waiting for {pending}"
                 ) from exc
             if isinstance(result, BaseException):
-                detail = (
-                    f": {self._redact(str(result))}"
-                    if isinstance(result, ReviewContractError)
-                    else ""
-                )
+                message = " ".join(str(result).split())
+                detail = f": {self._redact(message)}" if message else ""
                 raise DotBotExecutionError(
                     f"Panel {phase} failed for {model}: {type(result).__name__}{detail}"
                 ) from result
             turns[model] = result
         return turns
+
+    def _log_rejected_reply(
+        self,
+        model: str,
+        phase: str,
+        attempt: int,
+        error: ReviewContractError,
+        output: str,
+        correctable: bool,
+    ) -> None:
+        """Log why a reply was rejected; the reply text itself only when model text may be logged."""
+        if correctable:
+            outcome = "one correction requested"
+        elif attempt > 1:
+            outcome = "correction rejected too"
+        else:
+            outcome = "not correctable: the reply may hold findings or votes"
+        line = (
+            f"[review-panel-rejected] {model} {phase} reply {attempt}: "
+            f"{' '.join(str(error).split())} | {outcome} | {len(output)} chars"
+        )
+        if self.config.stream_output:
+            # Redact before truncating; JSON escaping keeps model text on this one line.
+            line += " | excerpt " + json.dumps(_excerpt(self._redact(output)), ensure_ascii=True)
+        print(self._redact(line), file=sys.stderr, flush=True)
 
     def _redact(self, text: str) -> str:
         for secret in sorted(

@@ -450,14 +450,32 @@ class OpenRouterClient:
         )
         choices = response.get("choices")
         if not isinstance(choices, list) or not choices:
-            raise DotBotExecutionError("OpenRouter response had no choices")
-        message = choices[0].get("message")
+            raise DotBotExecutionError(_missing_choices_message(response))
+        choice = choices[0]
+        message = choice.get("message") if isinstance(choice, dict) else None
         if not isinstance(message, dict):
             raise DotBotExecutionError("OpenRouter response had no message")
         content = message.get("content")
-        if not isinstance(content, str):
-            return ""
-        return content
+        text = content if isinstance(content, str) else ""
+        finish = choice.get("finish_reason")
+        if finish not in _KNOWN_FINISH_REASONS:
+            finish = "unrecognized"  # provider text never reaches the log
+        if finish not in (None, "stop") or not text.strip() or message.get("refusal"):
+            hint = {
+                "length": "output was cut off; the model may have spent its token budget on reasoning",
+                "content_filter": "the model or a provider filter refused",
+                "error": "the provider failed mid-generation",
+            }.get(str(finish), "")
+            print(
+                f"Warning: OpenRouter structured turn for "
+                f"{self._resolved_model(model_name, online_suffix=False)} ended with "
+                f"finish_reason={finish}, {len(text)} chars"
+                + ("; refusal returned" if message.get("refusal") else "")
+                + (f" ({hint})" if hint else ""),
+                file=sys.stderr,
+                flush=True,
+            )
+        return text
 
     # ------------------------------------------------------------------
     # HTTP
@@ -622,11 +640,33 @@ class OpenRouterClient:
 # ----------------------------------------------------------------------
 
 
+_KNOWN_FINISH_REASONS = {None, "stop", "length", "content_filter", "error", "tool_calls"}
+
+
+def _one_line(value: object, limit: int) -> str:
+    """Bound provider text to one line so it cannot inject a workflow command."""
+    return " ".join(str(value).split())[:limit]
+
+
+def _missing_choices_message(response: dict[str, Any]) -> str:
+    """Describe a response without choices, using OpenRouter's in-body error when present."""
+    error = response.get("error")
+    if not isinstance(error, dict):
+        return "OpenRouter response had no choices"
+    metadata = error.get("metadata")
+    error_type = metadata.get("error_type") if isinstance(metadata, dict) else None
+    detail = _one_line(error.get("message") or "", 300)
+    return (
+        f"OpenRouter returned an error instead of choices: code={_one_line(error.get('code'), 20)} "
+        f"type={_one_line(error_type or 'unknown', 60)} message={detail or 'none'}"
+    )
+
+
 def _result_from_response(response: dict[str, Any]) -> StreamingResult:
     """Convert a non-streaming chat-completion response to a StreamingResult."""
     choices = response.get("choices")
     if not isinstance(choices, list) or not choices:
-        raise DotBotExecutionError("OpenRouter response had no choices")
+        raise DotBotExecutionError(_missing_choices_message(response))
     choice = choices[0]
     if not isinstance(choice, dict):
         raise DotBotExecutionError("OpenRouter response choice was not an object")
