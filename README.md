@@ -265,25 +265,18 @@ selected with `prompts` (see [Review focus prompts](#review-focus-prompts)).
 
 ### Org/Repo Variables (`vars.DOTBOT_*`)
 
-The self-hosted workflows read two GitHub **Variables** (org- or repo-level),
-so one place can pin the models for every consuming repo without editing its
-config file:
+The self-hosted review workflow reads one GitHub **Variable** (org- or
+repo-level), so one place can pin the review models for every consuming repo
+without editing its config file:
 
 | Variable | Mode | Effect |
 |----------|------|--------|
 | `DOTBOT_REVIEW_MODELS` | review | Org/repo Variable consumed by the self-hosted workflow: replaces the primary/additional model roster while preserving other YAML settings. The `review_models` Action input is additive to the primary model. |
-| `DOTBOT_ACT_MODEL` | act | Model slug for `/dotbot` edits, including OpenRouter's `~` "latest" aliases (e.g. `~deepseek/deepseek-flash-latest`). Replaces the in-repo `act:` block for that run. |
 
-Both are optional. With a variable unset, nothing is generated and the in-repo
-`.openrouter-review.yml` (or the action default) applies. When set, the variable
-is authoritative — a variable set to a malformed slug fails the run instead of
-silently falling back.
-
-The act override is rendered to `$RUNNER_TEMP/dotbot-act-model.yml` and passed
-through the `config_path` input rather than written into the checkout: act mode
-pushes commits to the PR branch, so a generated file inside the worktree could
-otherwise be swept into the agent's commit. Review renders in place, since
-review never commits.
+It is optional. With the variable unset, nothing is generated and the in-repo
+`.openrouter-review.yml` (or the action default) applies. When set, the roster
+is rendered into `.openrouter-review.yml` in place for that run, since review
+never commits.
 
 Override the file path with the `config_path` action input or
 `OPENROUTER_REVIEW_CONFIG` env var (e.g. `ci/openrouter-models.yml`). Per-call
@@ -379,8 +372,8 @@ action-authored review threads** as context.
   `workflows:` scope for `GITHUB_TOKEN` — declaring one makes GitHub reject the
   entire workflow file, so no run ever starts. The `GITHUB_TOKEN` used to push
   cannot create or update workflow files either; to let `/dotbot` edit them, set
-  `secrets.REPO_ACCESS_TOKEN` to a PAT carrying the `workflow` scope (the
-  workflow already prefers it over `github.token`). Otherwise you'll see
+  `secrets.REPO_ACCESS_TOKEN` to a PAT carrying the `workflow` scope and pass
+  it as the checkout `token`, as in the Act example above. Otherwise you'll see
   `refusing to allow a GitHub App to create or update workflow … without
   workflows permission`.
 

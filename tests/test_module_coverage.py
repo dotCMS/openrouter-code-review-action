@@ -763,7 +763,6 @@ def test_main_helpers_cover_commands_and_event_loading(
 def test_review_action_uses_expected_model_and_drops_legacy_resume_cache() -> None:
     action_yaml = Path("action.yml").read_text(encoding="utf-8")
     review_workflow = Path(".github/workflows/dotbot-review.yml").read_text(encoding="utf-8")
-    act_workflow = Path(".github/workflows/dotbot-act.yml").read_text(encoding="utf-8")
 
     # The coordinator is the sole review engine and always deliberates fresh:
     # no Prepare/Restore/Save resume-cache steps, no actions/cache, and none of
@@ -785,8 +784,7 @@ def test_review_action_uses_expected_model_and_drops_legacy_resume_cache() -> No
     assert (
         '[ "${{ inputs.mode }}" = "act" ] && [ "${DOTBOT_PROVIDER:-openrouter}" = "openai" ]'
     ) in action_yaml
-    # Review and Act are separate workflows: review runs only on PR events
-    # so it reports as a genuine status check, Act only on /dotbot comments.
+    # Review runs only on PR events so it reports as a genuine status check.
     # Review uses pull_request_target so its job definition always comes from
     # the default branch; that event also runs fork PRs, so the job must skip
     # them, and its checkout must stay on the base branch (no PR `ref:`).
@@ -803,36 +801,24 @@ def test_review_action_uses_expected_model_and_drops_legacy_resume_cache() -> No
     ]
     assert checkouts
     assert all("ref" not in (step.get("with") or {}) for step in checkouts)
-    assert "issue_comment:" in act_workflow
     assert "openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}" in review_workflow
-    assert "openrouter_api_key: ${{ secrets.OPENROUTER_API_KEY }}" in act_workflow
     assert "mode: review" in review_workflow
-    assert "mode: act" in act_workflow
     assert "model: deepseek/deepseek-v4-pro-0813" in review_workflow
     # The action must be pinned to a trusted ref, never `./` executed from
-    # an untrusted PR-head checkout holding a write token (see the P0
-    # finding on dotbot-act.yml).
+    # an untrusted PR-head checkout holding a write token.
     assert "        uses: ./\n" not in review_workflow
-    assert "        uses: ./\n" not in act_workflow
     # This repo is the canonical home for the action, so the trusted pin points
     # at itself — not at the upstream wezell/ mirror, whose newest release
     # predates the github_approval_token input.
     assert "dotCMS/openrouter-code-review-action@" in review_workflow
-    assert "dotCMS/openrouter-code-review-action@" in act_workflow
     # The review preview executes one explicitly validated immutable candidate,
-    # never the incoming PR SHA. Act remains on the maintainer-controlled tag.
-    expected = {
-        "review": "998cdb510653072e8a52e6acc4cfd488d36db392",
-        "act": "latest",
-    }
-    for job_name, source in (("review", review_workflow), ("act", act_workflow)):
-        workflow = yaml.safe_load(source)
-        pins = [
-            step["uses"]
-            for step in workflow["jobs"][job_name]["steps"]
-            if str(step.get("uses", "")).startswith("dotCMS/openrouter-code-review-action@")
-        ]
-        assert pins == ["dotCMS/openrouter-code-review-action@" + expected[job_name]]
+    # never the incoming PR SHA.
+    pins = [
+        step["uses"]
+        for step in review_definition["jobs"]["review"]["steps"]
+        if str(step.get("uses", "")).startswith("dotCMS/openrouter-code-review-action@")
+    ]
+    assert pins == ["dotCMS/openrouter-code-review-action@998cdb510653072e8a52e6acc4cfd488d36db392"]
     # Auto-approval when every reviewer agrees: prefer the machine-user PAT,
     # fall back to the workflow token so a repo without the secret still approves.
     assert (
@@ -855,30 +841,18 @@ def test_self_review_supplies_the_actual_checkout_root() -> None:
 
 
 def test_self_hosted_workflows_drive_models_from_org_repo_variables() -> None:
-    """Review/act models come from the DOTBOT_* org/repo variables.
+    """Review models come from the DOTBOT_REVIEW_MODELS org/repo variable.
 
     DOTBOT_REVIEW_MODELS is rendered into .openrouter-review.yml for the run
-    (first entry = primary reviewer). DOTBOT_ACT_MODEL is rendered to a file in
-    RUNNER_TEMP and passed via `config_path` — never written into the checkout,
-    because act mode commits to the PR branch.
+    (first entry = primary reviewer).
     """
 
     review_workflow = Path(".github/workflows/dotbot-review.yml").read_text(encoding="utf-8")
-    act_workflow = Path(".github/workflows/dotbot-act.yml").read_text(encoding="utf-8")
 
     assert "if: ${{ vars.DOTBOT_REVIEW_MODELS != '' }}" in review_workflow
     assert "REVIEW_MODELS: ${{ vars.DOTBOT_REVIEW_MODELS }}" in review_workflow
-
-    assert "if: ${{ vars.DOTBOT_ACT_MODEL != '' }}" in act_workflow
-    assert "ACT_MODEL: ${{ vars.DOTBOT_ACT_MODEL }}" in act_workflow
-    assert "$RUNNER_TEMP/dotbot-act-model.yml" in act_workflow
-    assert "config_path=$RUNNER_TEMP/dotbot-act-model.yml" in act_workflow
-    assert (
-        "config_path: ${{ steps.act_model.outputs.config_path || '.openrouter-review.yml' }}"
-        in act_workflow
-    )
-    # The render step's behaviour (slug validation, YAML shape) is exercised
-    # end-to-end by tests/test_dotbot_workflow_model_vars.py.
+    # The render step's behaviour is exercised end-to-end by
+    # tests/test_dotbot_workflow_model_vars.py.
 
 
 def test_action_cli_steps_cannot_be_shadowed_by_the_checkout() -> None:
@@ -929,7 +903,7 @@ def test_action_input_descriptions_contain_no_expressions() -> None:
 def test_workflow_permissions_use_known_scopes() -> None:
     """An unknown permission scope makes GitHub reject the whole workflow file.
 
-    `workflows: write` in dotbot-act.yml did exactly that — every run was a
+    `workflows: write` in the former dotbot-act.yml did exactly that — every run was a
     "workflow file issue" (28 of them, silent to everyone) and /dotbot never
     executed. The scope lists are GitHub's; keep the guard in sync if GitHub
     adds one (actionlint in CI reports the same thing).
