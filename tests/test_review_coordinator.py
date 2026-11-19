@@ -724,7 +724,7 @@ def test_fence_is_only_stripped_around_the_whole_reply() -> None:
     overflow = _turn().replace(
         '"overall_confidence_score": 0.9', '"overall_confidence_score": 1e309'
     )
-    with pytest.raises(ReviewContractError, match="1e309 overflows"):
+    with pytest.raises(ReviewContractError, match="JSON number is outside the supported range"):
         PanelTurn.parse(overflow, set())
     with pytest.raises(ReviewContractError, match="NaN is not valid JSON"):
         PanelTurn.parse(
@@ -843,3 +843,26 @@ def test_streamed_transcript_neutralises_legacy_workflow_commands(
     assert "##[" not in out
     entry = json.loads(out.splitlines()[0].removeprefix("[review-panel] "))
     assert entry["message"] == "Hi ##[error]x"  # the JSON escape decodes back unchanged
+
+
+def test_overflowing_number_is_logged_without_its_token(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    token = "1" + "0" * 400 + ".0"
+
+    def handler(prompt: str, kwargs: dict[str, Any]) -> str:
+        if kwargs["model_name"] == "secondary":
+            reply = _turn().replace(
+                '"overall_confidence_score": 0.9', f'"overall_confidence_score": {token}'
+            )
+            kwargs["output_validator"](reply)
+        return _turn()
+
+    config = _config(tmp_path)
+    config.stream_output = False
+    panel, _ = _panel(config, handler)
+    with pytest.raises(DotBotExecutionError, match="outside the supported range"):
+        _run(panel, tmp_path)
+    err = capsys.readouterr().err
+    assert "JSON number is outside the supported range" in err
+    assert "0" * 50 not in err

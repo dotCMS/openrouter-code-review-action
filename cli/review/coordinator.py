@@ -143,7 +143,8 @@ def _no_workflow_commands(line: str) -> str:
 def _finite_float(literal: str) -> float:
     value = float(literal)
     if not math.isfinite(value):
-        raise ValueError(f"{literal} overflows to {value}")  # e.g. 1e309 becomes Infinity
+        # e.g. 1e309 becomes Infinity; the token itself is model text of any length, so omit it
+        raise ValueError("JSON number is outside the supported range")
     return value
 
 
