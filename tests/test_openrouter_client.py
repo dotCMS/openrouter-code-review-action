@@ -733,3 +733,16 @@ def test_uninspectable_structured_reply_is_an_error_not_a_retry(
 
     with pytest.raises(DotBotExecutionError, match="refusal or non-text structured output"):
         client.execute_structured("review", output_schema={"type": "object"})
+
+
+@pytest.mark.parametrize("finish", ["length", "content_filter", "error", "something_new"])
+def test_empty_reply_from_an_abnormal_turn_is_an_error_not_a_retry(
+    tmp_path: Path, finish: str
+) -> None:
+    reply = _text_response("")
+    reply["choices"][0]["finish_reason"] = finish
+    client = _client(tmp_path, _ScriptedTransport([_text_response("thinking"), reply]))
+    expected = finish if finish != "something_new" else "unrecognized"
+
+    with pytest.raises(DotBotExecutionError, match=f"finish_reason={expected} and no output"):
+        client.execute_structured("review", output_schema={"type": "object"})

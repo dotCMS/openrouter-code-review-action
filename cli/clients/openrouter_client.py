@@ -483,6 +483,11 @@ class OpenRouterClient:
             raise DotBotExecutionError(
                 "OpenRouter returned a refusal or non-text structured output"
             )
+        if not text.strip() and finish not in (None, "stop"):
+            # A cut-off, filtered or failed turn is not a decision-free reply; don't retry it.
+            raise DotBotExecutionError(
+                f"OpenRouter structured turn ended with finish_reason={finish} and no output"
+            )
         return text
 
     # ------------------------------------------------------------------

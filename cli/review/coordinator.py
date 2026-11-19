@@ -520,7 +520,7 @@ class ReviewCoordinator:
     ) -> None:
         """Log why a reply was rejected; the reply text itself only when model text may be logged."""
         if correctable:
-            outcome = "one correction requested"
+            outcome = "correction allowed"
         elif attempt > 1:
             outcome = "correction rejected too"
         else:

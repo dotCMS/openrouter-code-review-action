@@ -541,7 +541,7 @@ def test_real_client_repairs_one_turn_without_erasing_findings_or_votes(
         assert len(rejected) == 1
         assert "not correctable: the reply may hold findings or votes" in rejected[0]
     else:
-        assert "| one correction requested |" in rejected[0]
+        assert "| correction allowed |" in rejected[0]
     if correction in {"drop-finding", "change-vote"}:
         assert "reply 2: Correction changed findings or disposition actions" in rejected[1]
     if correction == "still-invalid":
