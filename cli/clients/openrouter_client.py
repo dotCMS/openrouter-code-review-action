@@ -302,6 +302,7 @@ class OpenRouterClient:
                     self.config.model_timeout_seconds
                     and time.monotonic() - started >= self.config.model_timeout_seconds
                 ):
+                    self._save_thread(thread_id, messages, model_name=model_name)  # for diagnosis
                     raise DotBotExecutionError(
                         "Model timeout reached before output correction"
                     ) from exc

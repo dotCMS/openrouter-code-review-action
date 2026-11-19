@@ -292,6 +292,9 @@ def test_output_correction_does_not_reset_the_model_timeout(
             output_validator=reject,
         )
     assert len(transport.payloads) == 2
+    # The rejected reply is saved for diagnosis even though no correction was sent.
+    [saved] = list((tmp_path / "threads").glob("*.json"))
+    assert "bad JSON" in saved.read_text()
 
 
 def test_execute_structured_empty_output_raises(tmp_path: Path) -> None:

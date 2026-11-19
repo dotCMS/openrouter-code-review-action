@@ -81,7 +81,8 @@ def _panel_output_schema(issue_ids: set[str]) -> dict[str, Any]:
 
 
 # A whole reply wrapped in one Markdown code fence; JSON is never extracted from prose.
-_FENCED_REPLY = re.compile(r"\A\s*```(?:json)?[ \t]*\r?\n(.*?)\r?\n[ \t]*```\s*\Z", re.DOTALL)
+# The body may be empty (opening and closing fence lines adjacent).
+_FENCED_REPLY = re.compile(r"\A\s*```(?:json)?[ \t]*\r?\n(?:(.*?)\r?\n)?[ \t]*```\s*\Z", re.DOTALL)
 _EXCERPT_CHARS = 300
 # Built only from a validated status code and error type, so safe to log whole.
 _LOG_SAFE_FAILURE = re.compile(
@@ -156,7 +157,7 @@ def _explicit_rejects(text: str) -> set[str]:
     """Ledger IDs a retried reply explicitly rejected; its correction must keep them rejected."""
     fenced = _FENCED_REPLY.match(text)
     try:
-        payload = json.loads(fenced.group(1) if fenced else text)
+        payload = json.loads((fenced.group(1) or "") if fenced else text)
     except ValueError:
         return set()
     dispositions = payload.get("dispositions") if isinstance(payload, dict) else None
@@ -208,7 +209,7 @@ class PanelTurn:
     @classmethod
     def parse(cls, output: str, issue_ids: set[str]) -> PanelTurn:
         fenced = _FENCED_REPLY.match(output)
-        text = fenced.group(1) if fenced else output
+        text = (fenced.group(1) or "") if fenced else output
         try:
             return cls._parse(text, issue_ids)
         except CorrectableReviewError:

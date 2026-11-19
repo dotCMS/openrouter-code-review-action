@@ -721,6 +721,10 @@ def test_rejected_reply_that_may_hold_a_decision_fails_closed(reply: str) -> Non
 def test_fence_is_only_stripped_around_the_whole_reply() -> None:
     assert PanelTurn.parse("```\n" + _turn() + "\n```", set()).review.findings == []
     assert PanelTurn.parse("```json\r\n" + _turn() + "\r\n```\r\n", set()).review.findings == []
+    # An empty fenced reply is unwrapped, so it gets the correction an empty reply gets.
+    for empty in ("```json\n```", "```\r\n```\r\n"):
+        with pytest.raises(CorrectableReviewError, match="Panel response is empty"):
+            PanelTurn.parse(empty, set())
     overflow = _turn().replace(
         '"overall_confidence_score": 0.9', '"overall_confidence_score": 1e309'
     )
