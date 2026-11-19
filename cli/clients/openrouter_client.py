@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import sys
 import time
 import urllib.error
@@ -450,7 +451,7 @@ class OpenRouterClient:
         )
         choices = response.get("choices")
         if not isinstance(choices, list) or not choices:
-            raise DotBotExecutionError(_missing_choices_message(response))
+            raise _missing_choices_error(response)
         choice = choices[0]
         message = choice.get("message") if isinstance(choice, dict) else None
         if not isinstance(message, dict):
@@ -458,7 +459,7 @@ class OpenRouterClient:
         content = message.get("content")
         text = content if isinstance(content, str) else ""
         finish = choice.get("finish_reason")
-        if finish not in _KNOWN_FINISH_REASONS:
+        if not (finish is None or isinstance(finish, str)) or finish not in _KNOWN_FINISH_REASONS:
             finish = "unrecognized"  # provider text never reaches the log
         if finish not in (None, "stop") or not text.strip() or message.get("refusal"):
             hint = {
@@ -648,17 +649,25 @@ def _one_line(value: object, limit: int) -> str:
     return " ".join(str(value).split())[:limit]
 
 
-def _missing_choices_message(response: dict[str, Any]) -> str:
-    """Describe a response without choices, using OpenRouter's in-body error when present."""
+def _missing_choices_error(response: dict[str, Any]) -> DotBotExecutionError:
+    """Describe a response without choices, using OpenRouter's in-body error when present.
+
+    The exception text can reach a public PR reply (act mode), so it carries only a validated
+    status code and error type; the provider's free-form message goes to the log alone.
+    """
     error = response.get("error")
     if not isinstance(error, dict):
-        return "OpenRouter response had no choices"
+        return DotBotExecutionError("OpenRouter response had no choices")
+    code = error.get("code")
     metadata = error.get("metadata")
     error_type = metadata.get("error_type") if isinstance(metadata, dict) else None
     detail = _one_line(error.get("message") or "", 300)
-    return (
-        f"OpenRouter returned an error instead of choices: code={_one_line(error.get('code'), 20)} "
-        f"type={_one_line(error_type or 'unknown', 60)} message={detail or 'none'}"
+    if detail:
+        print(f"OpenRouter error message: {detail}", file=sys.stderr, flush=True)
+    return DotBotExecutionError(
+        "OpenRouter returned an error instead of choices: "
+        f"code={code if type(code) is int and 100 <= code <= 599 else 'unknown'} "
+        f"type={error_type if isinstance(error_type, str) and re.fullmatch(r'[a-z_]{1,60}', error_type) else 'unknown'}"
     )
 
 
@@ -666,7 +675,7 @@ def _result_from_response(response: dict[str, Any]) -> StreamingResult:
     """Convert a non-streaming chat-completion response to a StreamingResult."""
     choices = response.get("choices")
     if not isinstance(choices, list) or not choices:
-        raise DotBotExecutionError(_missing_choices_message(response))
+        raise _missing_choices_error(response)
     choice = choices[0]
     if not isinstance(choice, dict):
         raise DotBotExecutionError("OpenRouter response choice was not an object")

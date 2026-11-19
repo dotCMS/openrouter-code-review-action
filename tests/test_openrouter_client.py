@@ -651,7 +651,9 @@ def test_schema_turn_logs_elapsed_and_accumulates_usage(
     assert "prompt_tokens=10" in stderr
 
 
-def test_in_body_error_without_choices_is_described(tmp_path: Path) -> None:
+def test_in_body_error_without_choices_is_described(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     error = {
         "error": {
             "code": 502,
@@ -661,11 +663,13 @@ def test_in_body_error_without_choices_is_described(tmp_path: Path) -> None:
     }
     client = _client(tmp_path, _ScriptedTransport([error]))
 
-    with pytest.raises(
-        DotBotExecutionError,
-        match="error instead of choices: code=502 type=provider_error message=Provider returned error",
-    ):
+    with pytest.raises(DotBotExecutionError) as caught:
         client.execute_text("inspect")
+    # The provider's free text stays in the log; the exception may be posted to a PR (act mode).
+    assert str(caught.value) == (
+        "OpenRouter returned an error instead of choices: code=502 type=provider_error"
+    )
+    assert "OpenRouter error message: Provider returned error" in capsys.readouterr().err
 
 
 def test_truncated_structured_turn_warns_with_finish_reason(
@@ -700,3 +704,15 @@ def test_provider_fields_cannot_inject_workflow_commands(
     with pytest.raises(DotBotExecutionError) as caught:
         client.execute_text("inspect")
     assert "\n" not in str(caught.value)
+
+
+@pytest.mark.parametrize("finish", [["stop"], {"reason": "stop"}, 7])
+def test_malformed_finish_reason_is_reported_not_raised(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], finish: Any
+) -> None:
+    reply = _text_response("{}")
+    reply["choices"][0]["finish_reason"] = finish
+    client = _client(tmp_path, _ScriptedTransport([_text_response("thinking"), reply]))
+
+    assert client.execute_structured("review", output_schema={"type": "object"}) == "{}"
+    assert "finish_reason=unrecognized" in capsys.readouterr().err

@@ -686,6 +686,11 @@ def test_rejected_reply_log_is_redacted_bounded_and_single_line(
         # Duplicate keys: plain parsing would keep only the empty, last value.
         '{"\\u0066indings": [{"title": "x"}], "findings": []}',
         '{"overall_correctness": "patch is correct", "findings": [], "findings": []}',
+        # Prior-finding decisions, findings in the wrong shape and cut-off bare arrays.
+        '{"carried_forward": [{"comment_id": "1"}], "findings": []',
+        '{"carried_forward": [',
+        '{"findings": {"title": "x"',
+        '[{"title": "a cut-off finding"',
     ],
 )
 def test_rejected_reply_that_may_hold_a_decision_fails_closed(reply: str) -> None:

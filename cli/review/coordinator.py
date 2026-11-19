@@ -76,11 +76,11 @@ def _panel_output_schema(issue_ids: set[str]) -> dict[str, Any]:
 
 # A whole reply wrapped in one Markdown code fence; JSON is never extracted from prose.
 _FENCED_REPLY = re.compile(r"\A\s*```(?:json)?[ \t]*\n(.*)\n[ \t]*```\s*\Z", re.DOTALL)
-# Raw-text signs of a possible decision, matched even in truncated JSON: a findings array
-# that is not visibly empty, any action other than reject, any verdict other than approval,
-# and any \\u escape, which could spell one of these keys or values out of sight.
+# Raw-text signs of a possible decision, matched even in truncated JSON: findings or
+# carried_forward that are not an explicitly empty array, any action other than reject, any
+# verdict other than approval, and any \\u escape, which could spell these out of sight.
 _DECISION_MARKERS = re.compile(
-    r'"findings"\s*:\s*\[(?!\s*\])'
+    r'"(?:findings|carried_forward)"\s*:(?!\s*\[\s*\])'
     r'|"action"\s*:(?!\s*"reject")'
     r'|"overall_correctness"\s*:(?!\s*"patch is correct")'
     r"|\\u"
@@ -90,7 +90,8 @@ _EXCERPT_CHARS = 300
 
 def _carries_decision(text: str) -> bool:
     """Whether a rejected reply may hold a decision that a correction could erase."""
-    if _DECISION_MARKERS.search(text):
+    # A top-level array can only be a bare list of findings, even when cut off.
+    if text.lstrip().startswith("[") or _DECISION_MARKERS.search(text):
         return True
     try:
         payload = json.loads(text, object_pairs_hook=_unique_json_object)
@@ -103,6 +104,7 @@ def _carries_decision(text: str) -> bool:
     dispositions = payload.get("dispositions")
     return (
         bool(payload.get("findings"))
+        or bool(payload.get("carried_forward"))
         or payload.get("overall_correctness") == "patch is incorrect"
         or (
             isinstance(dispositions, dict)
