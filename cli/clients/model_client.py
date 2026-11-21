@@ -47,8 +47,9 @@ def create_model_client(config: ReviewConfig) -> ModelClientProtocol:
     """Build the model client selected by ``config.model_provider``.
 
     ``openai`` routes to the legacy Codex SDK client; everything else
-    (notably the default ``openrouter``) routes to the OpenRouter
+    (the default ``openrouter``, and ``bedrock``) routes to the
     chat-completions client with the built-in tool-calling agent loop.
+    Bedrock is reached through its OpenAI-compatible endpoint.
     """
     if config.model_provider == "openai":
         from .codex_client import CodexClient

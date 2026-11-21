@@ -16,6 +16,14 @@ inputs:
   openrouter_api_key:
     description: "OpenRouter API key used for all routed model calls"
     required: false
+  model_provider:
+    description: >-
+      Model gateway: openrouter | bedrock (openai is act-only). Empty uses the
+      DOTBOT_PROVIDER environment variable, then openrouter. For bedrock, run
+      aws-actions/configure-aws-credentials first (with AWS_REGION set); the
+      action mints a short-term Bedrock API key from that role session.
+    required: false
+    default: ""
   github_approval_token:
     description: >-
       Token used to submit the approval review when the final configured
@@ -138,7 +146,7 @@ runs:
     - name: Install Python dependencies
       shell: bash
       env:
-        DOTBOT_PROVIDER: ${{ env.DOTBOT_PROVIDER }}
+        DOTBOT_PROVIDER: ${{ inputs.model_provider || env.DOTBOT_PROVIDER }}
       run: |
         set -euo pipefail
         python3 -m pip install --upgrade pip
@@ -147,6 +155,9 @@ runs:
         # is only valid for act mode; review is OpenRouter-only.
         if [ "${{ inputs.mode }}" = "act" ] && [ "${DOTBOT_PROVIDER:-openrouter}" = "openai" ]; then
           python3 -m pip install ${{ inputs.extra_pip_args }} -r "${{ github.action_path }}/requirements-openai.txt"
+        fi
+        if [ "${DOTBOT_PROVIDER:-openrouter}" = "bedrock" ]; then
+          python3 -m pip install ${{ inputs.extra_pip_args }} -r "${{ github.action_path }}/requirements-bedrock.txt"
         fi
 
     - name: Run dotbot autonomous review (CLI)
@@ -159,6 +170,7 @@ runs:
         OPENAI_API_KEY: ${{ inputs.openai_api_key }}
         OPENROUTER_API_KEY: ${{ inputs.openrouter_api_key }}
         # Config
+        DOTBOT_PROVIDER: ${{ inputs.model_provider || env.DOTBOT_PROVIDER }}
         DOTBOT_MODE: ${{ inputs.mode }}
         DOTBOT_REVIEW_STATUS_COMMENT_ID: ${{ steps.review_status.outputs.result }}
         DOTBOT_REVIEW_EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -190,6 +202,14 @@ runs:
         OPENROUTER_THREAD_DIR: ${{ runner.temp }}/openrouter-review-threads
       run: |
         set -euo pipefail
+        if [ "${DOTBOT_PROVIDER:-openrouter}" = "bedrock" ]; then
+          # Mint a short-term Bedrock API key from the job's role session, mask it,
+          # then drop the role credentials: the CLI and its model tools get only the key.
+          AWS_BEARER_TOKEN_BEDROCK="$(python3 -I "${{ github.action_path }}/scripts/bedrock_api_key.py")"
+          echo "::add-mask::${AWS_BEARER_TOKEN_BEDROCK}"
+          export AWS_BEARER_TOKEN_BEDROCK
+          unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+        fi
         # Execute the CLI directly; it detects GitHub Actions via env.
         # ``-u`` belt-and-braces with PYTHONUNBUFFERED above so streaming
         # output is forwarded to the GH Actions log line-by-line.

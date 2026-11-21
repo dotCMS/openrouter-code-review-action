@@ -25,6 +25,15 @@ turn first (tools enabled, streaming to logs), then a schema-enforced
 turn that replays the whole conversation with OpenRouter's strict
 ``response_format`` JSON-schema enforcement and no tools.
 
+Amazon Bedrock
+--------------
+With ``model_provider == "bedrock"`` the same loop talks to Bedrock's
+OpenAI-compatible chat-completions endpoint in ``bedrock_region``,
+authenticated with a short-term Bedrock API key. Bedrock takes
+``reasoning_effort`` instead of OpenRouter's ``reasoning`` object, has no
+``:online`` web search, and reports no per-request cost, so the review's
+cost is shown as unknown.
+
 Resume parity
 -------------
 Conversations are persisted through
@@ -62,6 +71,9 @@ OPENROUTER_REFERER = "https://github.com/dotcms/openrouter-code-review-action"
 OPENROUTER_TITLE = "openrouter-code-review-action"
 OPENROUTER_USER_AGENT = "openrouter-code-review-action/1.0"
 OPENROUTER_TIMEOUT_SECONDS = 300
+BEDROCK_CHAT_URL_TEMPLATE = (
+    "https://bedrock-runtime.{region}.amazonaws.com/openai/v1/chat/completions"
+)
 
 DEFAULT_MAX_TOOL_ITERATIONS = 30
 _ONLINE_SUFFIX = ":online"
@@ -412,7 +424,7 @@ class OpenRouterClient:
         payload: dict[str, Any] = {
             "model": self._resolved_model(model_name, online_suffix=True),
             "messages": messages,
-            "reasoning": {"effort": self._resolve_effort(reasoning_effort)},
+            **self._reasoning_fields(reasoning_effort),
         }
         if include_tools:
             tools = TOOL_SPECS
@@ -441,7 +453,7 @@ class OpenRouterClient:
                 schema=output_schema,
                 name="structured_output",
             ),
-            "reasoning": {"effort": self._resolve_effort(reasoning_effort)},
+            **self._reasoning_fields(reasoning_effort),
             "stream": False,
         }
         started = time.monotonic()
@@ -525,19 +537,21 @@ class OpenRouterClient:
 
         body = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
-            OPENROUTER_CHAT_URL,
+            self._chat_url(),
             data=body,
             method="POST",
             headers=self._headers(),
         )
         try:
-            with urllib.request.urlopen(request, timeout=OPENROUTER_TIMEOUT_SECONDS) as resp:  # nosec B310 — fixed https URL
+            with urllib.request.urlopen(request, timeout=OPENROUTER_TIMEOUT_SECONDS) as resp:  # nosec B310 — fixed https host
                 decoded = json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
-            raise DotBotExecutionError(f"OpenRouter HTTP {exc.code}: {detail[:500]}") from exc
+            raise DotBotExecutionError(
+                f"{self._gateway()} HTTP {exc.code}: {detail[:500]}"
+            ) from exc
         except urllib.error.URLError as exc:
-            raise DotBotExecutionError(f"OpenRouter request failed: {exc}") from exc
+            raise DotBotExecutionError(f"{self._gateway()} request failed: {exc}") from exc
         if not isinstance(decoded, dict):
             raise DotBotExecutionError("OpenRouter response was not a JSON object")
         # Count usage before callers validate choices, so a rejected response keeps its cost.
@@ -575,13 +589,13 @@ class OpenRouterClient:
     def _urllib_stream_chunks(self, payload: dict[str, Any]) -> Iterable[bytes]:
         body = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
-            OPENROUTER_CHAT_URL,
+            self._chat_url(),
             data=body,
             method="POST",
             headers=self._headers(),
         )
         try:
-            with urllib.request.urlopen(request, timeout=OPENROUTER_TIMEOUT_SECONDS) as resp:  # nosec B310 — fixed https URL
+            with urllib.request.urlopen(request, timeout=OPENROUTER_TIMEOUT_SECONDS) as resp:  # nosec B310 — fixed https host
                 while True:
                     chunk = resp.read(4096)
                     if not chunk:
@@ -589,15 +603,41 @@ class OpenRouterClient:
                     yield chunk
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
-            raise DotBotExecutionError(f"OpenRouter HTTP {exc.code}: {detail[:500]}") from exc
+            raise DotBotExecutionError(
+                f"{self._gateway()} HTTP {exc.code}: {detail[:500]}"
+            ) from exc
         except urllib.error.URLError as exc:
-            raise DotBotExecutionError(f"OpenRouter request failed: {exc}") from exc
+            raise DotBotExecutionError(f"{self._gateway()} request failed: {exc}") from exc
+
+    def _is_bedrock(self) -> bool:
+        return self.config.model_provider == "bedrock"
+
+    def _gateway(self) -> str:
+        return "Bedrock" if self._is_bedrock() else "OpenRouter"
+
+    def _chat_url(self) -> str:
+        if self._is_bedrock():
+            # ReviewConfig.validate() accepts only a region name, so the host stays AWS's.
+            return BEDROCK_CHAT_URL_TEMPLATE.format(region=self.config.bedrock_region)
+        return OPENROUTER_CHAT_URL
 
     def _require_api_key(self) -> None:
+        if self._is_bedrock():
+            if not self.config.bedrock_api_key.strip():
+                raise ConfigurationError(
+                    "Missing AWS_BEARER_TOKEN_BEDROCK for model provider 'bedrock'"
+                )
+            return
         if not self.config.openrouter_api_key.strip():
             raise ConfigurationError("Missing OPENROUTER_API_KEY for model provider 'openrouter'")
 
     def _headers(self) -> dict[str, str]:
+        if self._is_bedrock():
+            return {
+                "Authorization": f"Bearer {self.config.bedrock_api_key.strip()}",
+                "Content-Type": "application/json",
+                "User-Agent": OPENROUTER_USER_AGENT,
+            }
         return {
             "Authorization": f"Bearer {self.config.openrouter_api_key.strip()}",
             "Content-Type": "application/json",
@@ -654,12 +694,19 @@ class OpenRouterClient:
         self._debug(1, f"Invalid reasoning effort '{value}', falling back to 'medium'")
         return "medium"
 
+    def _reasoning_fields(self, reasoning_effort: str | None) -> dict[str, Any]:
+        effort = self._resolve_effort(reasoning_effort)
+        if self._is_bedrock():
+            return {"reasoning_effort": effort}
+        return {"reasoning": {"effort": effort}}
+
     def _resolved_model(self, model_name: str | None, *, online_suffix: bool) -> str:
         model = (model_name or self.config.selected_model or "").strip()
         if not model:
             raise ConfigurationError("No OpenRouter model configured")
         if (
             online_suffix
+            and not self._is_bedrock()  # Bedrock has no :online web search
             and self.config.web_search_mode == "live"
             and not model.endswith(_ONLINE_SUFFIX)
         ):

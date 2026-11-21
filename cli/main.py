@@ -82,7 +82,7 @@ Environment Variables:
     parser.add_argument(
         "--provider",
         dest="model_provider",
-        choices=["openrouter", "openai"],
+        choices=["openrouter", "bedrock", "openai"],
         default="openrouter",
         help="Model provider (default: openrouter)",
     )

@@ -185,9 +185,10 @@ class ReviewWorkflow:
         github_client: GitHubClientProtocol | None = None,
         model_client_factory: Callable[[ReviewConfig], ModelClientProtocol] | None = None,
     ) -> None:
-        if config.model_provider != "openrouter":
+        if config.model_provider not in ("openrouter", "bedrock"):
             raise ConfigurationError(
-                "Review mode requires OpenRouter; use a v1 release for the old review provider"
+                "Review mode requires OpenRouter or Bedrock; "
+                "use a v1 release for the old review provider"
             )
         self.config = config
         self._model_client_factory = model_client_factory

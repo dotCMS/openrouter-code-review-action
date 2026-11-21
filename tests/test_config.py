@@ -169,7 +169,7 @@ def test_from_args_rejects_unknown_provider(
             github_token="token",
             repository="owner/repo",
             pr_number=1,
-            model_provider="bedrock",
+            model_provider="anthropic",
         )
 
 

@@ -297,7 +297,8 @@ call time; `cached` and `disabled` skip the live web fetch.
 
 | Input | Description | Default |
 |-------|-------------|---------|
-| `openrouter_api_key` | OpenRouter API key for routed model calls | *required* |
+| `openrouter_api_key` | OpenRouter API key for routed model calls | *required* unless `model_provider` is `bedrock` |
+| `model_provider` | Model gateway: `openrouter` or `bedrock` (see [Amazon Bedrock](#amazon-bedrock)) | `openrouter` |
 | `config_path` | Path to the in-repo model config file | `.openrouter-review.yml` |
 | `mode` | `review` or `act` | `review` |
 | **Model** | | |
@@ -323,6 +324,34 @@ call time; `cached` and `disabled` skip the live web fetch.
 
 > `openai_api_key` is only for the optional SDK-backed act mode. Review mode
 > requires OpenRouter and rejects `DOTBOT_PROVIDER=openai`.
+
+## Amazon Bedrock
+
+Set `model_provider: bedrock` to reach models through Amazon Bedrock's OpenAI-compatible
+chat-completions endpoint instead of OpenRouter. There is no stored model key: the job assumes
+an AWS role through GitHub OIDC, and the action mints a short-term Bedrock API key from that
+role session, masks it, and removes the role credentials before the review starts.
+
+```yaml
+permissions:
+  id-token: write
+steps:
+  - uses: aws-actions/configure-aws-credentials@<sha> # pin to a full SHA
+    with:
+      role-to-assume: arn:aws:iam::<account>:role/<review-role>
+      aws-region: us-east-1
+  - uses: dotcms/openrouter-code-review-action@<sha>
+    with:
+      model_provider: bedrock
+      config_path: .bedrock-review.yml
+```
+
+The role needs `bedrock:InvokeModel` and `bedrock:InvokeModelWithResponseStream` on the panel's
+models, and `bedrock:CallWithBearerToken` limited to short-term keys. Model IDs are Bedrock's
+(for example `deepseek.v3.2`, `zai.glm-5`), so keep them in their own config file. A model must
+support function tools with reasoning on chat completions; Anthropic models are not served on
+that endpoint. Bedrock has no `:online` web search, and it reports no per-request cost, so the
+summary omits the cost line.
 
 ## Agent Loop
 

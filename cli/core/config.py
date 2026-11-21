@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -27,6 +28,8 @@ _CONFIG_OVERRIDE_KEYS = frozenset(
         "model_provider",
         "openai_api_key",
         "openrouter_api_key",
+        "bedrock_api_key",
+        "bedrock_region",
         "model_name",
         "review_model",
         "review_models",
@@ -51,6 +54,8 @@ _CONFIG_OVERRIDE_KEYS = frozenset(
 )
 
 DEFAULT_PROMPTS = ("code_java",)
+DEFAULT_BEDROCK_REGION = "us-east-1"
+_AWS_REGION_PATTERN = re.compile(r"[a-z]{2}(-gov)?-[a-z]+-\d")
 _DEFAULT_ALLOWED_COMMENTER_ASSOCIATIONS = ("MEMBER", "OWNER", "COLLABORATOR")
 _VALID_COMMENTER_ASSOCIATIONS = frozenset(
     {
@@ -75,6 +80,8 @@ class _ReviewConfigValues(TypedDict):
     model_provider: str
     openai_api_key: str
     openrouter_api_key: str
+    bedrock_api_key: str
+    bedrock_region: str
     model_name: str
     review_model: str
     review_models: tuple[str, ...]
@@ -108,6 +115,9 @@ class ReviewConfig:
     model_provider: str = "openrouter"
     openai_api_key: str = ""
     openrouter_api_key: str = ""
+    # Short-term Amazon Bedrock API key, minted by the action from the job's AWS role.
+    bedrock_api_key: str = ""
+    bedrock_region: str = DEFAULT_BEDROCK_REGION
     model_name: str = "gpt-5.4"
     review_model: str = DEFAULT_REVIEW_MODEL
     review_models: tuple[str, ...] = ()
@@ -209,7 +219,8 @@ class ReviewConfig:
 
         if self.mode == "review" and self.model_provider == "openai":
             raise ConfigurationError(
-                "Review mode requires OpenRouter; pin a v1 release for the old review provider"
+                "Review mode requires OpenRouter or Bedrock; "
+                "pin a v1 release for the old review provider"
             )
 
         if self.model_provider == "openrouter":
@@ -217,12 +228,21 @@ class ReviewConfig:
                 raise ConfigurationError(
                     "Missing OPENROUTER_API_KEY for model provider 'openrouter'"
                 )
+        elif self.model_provider == "bedrock":
+            if not self.bedrock_api_key.strip():
+                raise ConfigurationError(
+                    "Missing AWS_BEARER_TOKEN_BEDROCK for model provider 'bedrock'"
+                )
+            # The region becomes part of the endpoint host, so accept only a region name.
+            if not _AWS_REGION_PATTERN.fullmatch(self.bedrock_region):
+                raise ConfigurationError(f"Invalid Bedrock region: {self.bedrock_region!r}")
         elif self.model_provider == "openai":
             if not self.openai_api_key.strip():
                 raise ConfigurationError("Missing OPENAI_API_KEY for model provider 'openai'")
         else:
             raise ConfigurationError(
-                f"Invalid model_provider: {self.model_provider}. Must be 'openrouter' or 'openai'"
+                f"Invalid model_provider: {self.model_provider}. "
+                "Must be 'openrouter', 'bedrock' or 'openai'"
             )
 
         associations = self.allowed_commenter_associations
@@ -409,6 +429,8 @@ def _config_values_from_environment() -> _ReviewConfigValues:
         "model_provider": os.environ.get("DOTBOT_PROVIDER", "openrouter").strip(),
         "openai_api_key": openai_api_key,
         "openrouter_api_key": os.environ.get("OPENROUTER_API_KEY", "").strip(),
+        "bedrock_api_key": os.environ.get("AWS_BEARER_TOKEN_BEDROCK", "").strip(),
+        "bedrock_region": os.environ.get("AWS_REGION", "").strip() or DEFAULT_BEDROCK_REGION,
         "model_name": os.environ.get("DOTBOT_MODEL", "gpt-5.4").strip(),
         "review_model": os.environ.get("OPENROUTER_REVIEW_MODEL", DEFAULT_REVIEW_MODEL).strip()
         or DEFAULT_REVIEW_MODEL,
@@ -518,6 +540,14 @@ def _apply_config_overrides(values: _ReviewConfigValues, kwargs: Mapping[str, An
     openrouter_api_key = kwargs.get("openrouter_api_key")
     if openrouter_api_key is not None:
         values["openrouter_api_key"] = str(openrouter_api_key).strip()
+
+    bedrock_api_key = kwargs.get("bedrock_api_key")
+    if bedrock_api_key is not None:
+        values["bedrock_api_key"] = str(bedrock_api_key).strip()
+
+    bedrock_region = kwargs.get("bedrock_region")
+    if bedrock_region is not None:
+        values["bedrock_region"] = str(bedrock_region).strip()
 
     model_name = kwargs.get("model_name")
     if model_name is not None:

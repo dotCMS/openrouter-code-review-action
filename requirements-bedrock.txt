@@ -1,0 +1,3 @@
+# Installed only when model_provider is "bedrock": mints the short-term Bedrock API key.
+aws-bedrock-token-generator==1.1.0
+botocore==1.44.3

@@ -623,6 +623,7 @@ class ReviewCoordinator:
                 self.config.github_approval_token,
                 self.config.openai_api_key,
                 self.config.openrouter_api_key,
+                self.config.bedrock_api_key,
             },
             key=len,
             reverse=True,
