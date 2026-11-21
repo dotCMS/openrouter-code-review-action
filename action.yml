@@ -205,7 +205,8 @@ runs:
         if [ "${DOTBOT_PROVIDER:-openrouter}" = "bedrock" ]; then
           # Mint a short-term Bedrock API key from the job's role session, mask it,
           # then drop the role credentials: the CLI and its model tools get only the key.
-          AWS_BEARER_TOKEN_BEDROCK="$(python3 -I "${{ github.action_path }}/scripts/bedrock_api_key.py")"
+          # -P, not -I: pip installs into the user site on runners, which -I would hide.
+          AWS_BEARER_TOKEN_BEDROCK="$(python3 -P "${{ github.action_path }}/scripts/bedrock_api_key.py")"
           echo "::add-mask::${AWS_BEARER_TOKEN_BEDROCK}"
           export AWS_BEARER_TOKEN_BEDROCK
           unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN

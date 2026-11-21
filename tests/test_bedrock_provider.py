@@ -181,3 +181,12 @@ def test_bedrock_key_is_redacted_from_panel_logs(tmp_path: Path) -> None:
     coordinator = ReviewCoordinator(_bedrock_config(tmp_path), lambda config: cast(Any, None))
 
     assert coordinator._redact("key=bedrock-api-key-test") == "key=[REDACTED]"
+
+
+def test_action_mints_the_bedrock_key_without_hiding_user_site_packages() -> None:
+    # Runners install requirements with pip --user; python -I would hide them.
+    action = Path(__file__).resolve().parent.parent.joinpath("action.yml").read_text()
+    mint = next(line for line in action.splitlines() if "bedrock_api_key.py" in line)
+
+    assert "python3 -P " in mint
+    assert "python3 -I " not in mint
