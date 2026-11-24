@@ -1,5 +1,9 @@
 # OpenRouter Code Review Action (Review + Act)
 
+> **This action is no longer maintained.** dotCMS now reviews pull requests
+> with an internal GitHub App. Workflows that already reference this action
+> keep working; no new changes are accepted.
+
 Run an OpenRouter-routed model to review pull requests and, on demand, make
 autonomous edits driven by `/dotbot` comments. Review path uses direct
 OpenRouter chat completions with schema-enforced JSON output; Act path runs the
